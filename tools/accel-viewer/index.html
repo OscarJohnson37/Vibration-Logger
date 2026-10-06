@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accel Viewer</title>
+<!-- TEMPORARY bench tool. Delete the tools/accel-viewer folder to remove it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #667085; --border: #d9dde5;
+    --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+    --c1: #e5484d; --c2: #30a46c; --c3: #3e63dd; --grid: #e6e8ee; --scene: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11141a; --panel: #1a1f28; --text: #e6e9ef; --muted: #8b93a3; --border: #2b323e;
+      --accent: #5b8cff; --ok: #3dd68c; --warn: #f5a524; --err: #ff6369;
+      --c1: #ff6b70; --c2: #4cc38a; --c3: #7b9bff; --grid: #252b36; --scene: #161b23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+           padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  button, select { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+                   background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  main { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 12px; padding: 12px 16px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  #scene { width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: var(--scene); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .controls label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  canvas.plot { width: 100%; height: 260px; display: block; }
+  #fft { height: 200px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+  #msg { color: var(--err); padding: 0 16px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Accel Viewer</h1>
+  <button id="connect" class="primary">Connect</button>
+  <button id="zero" disabled>Zero (place flat)</button>
+  <button id="pause" disabled>Pause</button>
+  <span class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></span>
+</header>
+<p id="msg"></p>
+<main>
+  <section class="panel">
+    <h2>Orientation</h2>
+    <div id="scene"></div>
+    <div class="controls" style="margin-top:8px">
+      <button id="loadModel">Load model…</button>
+      <input type="file" id="modelFile" accept=".stl,.obj,.glb" hidden>
+      <span style="color:var(--muted)">Model</span>
+      <button id="rotX">Rotate X 90°</button>
+      <button id="rotY">Rotate Y 90°</button>
+      <button id="rotZ">Rotate Z 90°</button>
+      <button id="removeModel" disabled>Use default board</button>
+    </div>
+    <div class="controls">
+      <span style="color:var(--muted)">Data axes</span>
+      <button id="axRotX">Rotate X 90°</button>
+      <button id="axRotY">Rotate Y 90°</button>
+      <button id="axRotZ">Rotate Z 90°</button>
+      <button id="axInvX">Invert X</button>
+      <button id="axInvY">Invert Y</button>
+      <button id="axInvZ">Invert Z</button>
+      <button id="axReset">Reset</button>
+    </div>
+    <p class="hint" id="axisInfo" style="margin-top:0"></p>
+    <p class="hint" id="modelInfo" style="margin-top:0">Load an STL, OBJ or GLB to replace the default board.</p>
+    <dl class="kv">
+      <dt>Down axis</dt><dd id="downAxis">n/a</dd>
+      <dt>Tilt from zero</dt><dd id="tilt">n/a</dd>
+      <dt>Gravity (sensor)</dt><dd id="gvec">n/a</dd>
+      <dt>|a|</dt><dd id="gmag">n/a</dd>
+      <dt>Shocks ignored</dt><dd id="shocks">0 samples</dd>
+    </dl>
+    <p class="hint">Arrows show the data axes <b style="color:var(--c1)">X</b>,
+      <b style="color:var(--c2)">Y</b>, <b style="color:var(--c3)">Z</b>.
+      <b>Model</b> buttons turn the model relative to the arrows.
+      <b>Data axes</b> buttons change which accelerometer axis feeds each arrow; nothing moves on screen,
+      only how the model responds when you tilt the real thing.</p>
+  </section>
+  <section class="panel">
+    <h2>Vibration</h2>
+    <div class="controls">
+      <label>Axes
+        <select id="frame">
+          <option value="mount">Vertical / horizontal (zeroed)</option>
+          <option value="sensor">Sensor X / Y / Z</option>
+        </select>
+      </label>
+      <label>Window
+        <select id="window">
+          <option value="1">1 s</option><option value="2" selected>2 s</option>
+          <option value="5">5 s</option><option value="10">10 s</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="hp" checked> Remove gravity</label>
+    </div>
+    <canvas id="plot" class="plot"></canvas>
+    <table>
+      <thead><tr><th>Channel</th><th>RMS (g)</th><th>Peak (g)</th><th>Dominant (Hz)</th></tr></thead>
+      <tbody id="stats"></tbody>
+    </table>
+    <h2 style="margin-top:16px">Spectrum (FFT)</h2>
+    <div class="controls">
+      <label>FFT size
+        <select id="fftSize">
+          <option value="512">512</option><option value="1024">1024</option>
+          <option value="2048" selected>2048</option><option value="4096">4096</option>
+          <option value="8192">8192</option>
+        </select>
+      </label>
+      <label>Scale
+        <select id="fftScale">
+          <option value="lin">Linear (g)</option>
+          <option value="db">Log (dB re 1 g)</option>
+        </select>
+      </label>
+      <span id="fftInfo" class="hint" style="margin:0"></span>
+    </div>
+    <canvas id="fft" class="plot"></canvas>
+    <p class="hint" id="fftHover">Hover over the spectrum to read frequency and amplitude.</p>
+    <p class="hint">Each point is the vibration amplitude (in g) at that frequency, from an FFT of the
+      latest samples with a Hann window. Bigger FFT size = finer frequency resolution but slower to react.
+      Highest frequency shown is half the sample rate.</p>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ---------- state ----------
+let rate = 800, gPerLsb = 0.0039;
+const MAX_SECONDS = 10;
+let cap = 0, head = 0, count = 0;
+let raw = [], hpf = [];                  // ring buffers [x,y,z] in g
+let lp = [0, 0, 1], lpOri = [0, 0, 1];   // gravity estimates (slow for HP filter, faster for display)
+let lpInit = false;
+let paused = false, port = null, reader = null, rxCount = 0;
+
+function allocBuffers() {
+  cap = Math.ceil(rate * MAX_SECONDS);
+  raw = [0, 1, 2].map(() => new Float32Array(cap));
+  hpf = [0, 1, 2].map(() => new Float32Array(cap));
+  head = 0; count = 0;
+}
+allocBuffers();
+
+// Zero reference: gravity direction (sensor frame) when "flat". Default: +Z up.
+let zeroVec = loadZero() || [0, 0, 1];
+let badSamples = 0, sensorErrors = 0, msgTimer = null;
+
+// Axis map: your axes = axisMap * chip axes. A signed permutation (90° rotations and inversions).
+// Applied to what's displayed (arrows, X/Y/Z plots, readouts); orientation tracking uses raw chip data.
+const AX = ["X", "Y", "Z"];
+const IDENTITY = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+let axisMap = loadAxisMap() || IDENTITY.map(r => r.slice());
+const mapVec = v => axisMap.map(r => r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
+
+function loadAxisMap() {
+  try {
+    const m = JSON.parse(localStorage.getItem("accelViewer.axisMap"));
+    const ok = Array.isArray(m) && m.length === 3 && m.every(r => Array.isArray(r) && r.length === 3 &&
+      r.filter(v => v !== 0).length === 1 && r.every(v => v === 0 || v === 1 || v === -1));
+    return ok ? m : null;
+  } catch { return null; }
+}
+
+// Only accept a zero that actually looks like gravity
+const validGravity = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite) && Math.hypot(...v) > 0.5;
+
+function loadZero() {
+  try { const v = JSON.parse(localStorage.getItem("accelViewer.zero")); return validGravity(v) ? v : null; }
+  catch { return null; }
+}
+
+// Messages clear themselves so a one-off glitch doesn't look like a permanent fault
+function showMsg(text, ms = 5000) {
+  $("msg").textContent = text;
+  clearTimeout(msgTimer);
+  if (ms) msgTimer = setTimeout(() => { $("msg").textContent = ""; }, ms);
+}
+function saveZero(v) { try { localStorage.setItem("accelViewer.zero", JSON.stringify(v)); } catch {} }
+
+// ---------- vector / quaternion helpers ----------
+const norm = v => { const m = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / m, v[1] / m, v[2] / m]; };
+const UP = new THREE.Vector3(0, 1, 0);
+let Q0 = new THREE.Quaternion();   // rotates sensor frame -> mount frame (zero gravity -> +Y up)
+let M0 = new THREE.Matrix3();
+function updateZeroFrame() {
+  const z = norm(zeroVec);
+  Q0.setFromUnitVectors(new THREE.Vector3(z[0], z[1], z[2]), UP);
+  M0.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(Q0));
+  updateAxisArrows();
+}
+
+// ---------- serial ----------
+const $ = id => document.getElementById(id);
+
+$("connect").onclick = async () => {
+  if (port) { await disconnect(); return; }
+  if (!("serial" in navigator)) {
+    $("msg").textContent = "This browser has no Web Serial support. Use Chrome or Edge on desktop.";
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303A }] });
+    await port.open({ baudRate: 115200 });
+    try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch {}
+    $("msg").textContent = "";
+    $("connect").textContent = "Disconnect";
+    ["zero", "pause"].forEach(id => $(id).disabled = false);
+    $("dot").classList.add("on");
+    readLoop();
+  } catch (e) {
+    port = null;
+    if (e.name !== "NotFoundError") $("msg").textContent = "Could not open port: " + e.message +
+      " (close any other serial monitor first)";
+  }
+};
+
+async function disconnect() {
+  try { if (reader) await reader.cancel(); } catch {}
+  try { if (port) await port.close(); } catch {}
+  port = null; reader = null;
+  $("connect").textContent = "Connect";
+  ["zero", "pause"].forEach(id => $(id).disabled = true);
+  $("dot").classList.remove("on");
+  $("status").textContent = "Not connected";
+}
+
+async function readLoop() {
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    reader = port.readable.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        handleLine(buf.slice(0, nl).trim());
+        buf = buf.slice(nl + 1);
+      }
+    }
+  } catch (e) {
+    $("msg").textContent = "Serial read stopped: " + e.message;
+  } finally {
+    try { reader.releaseLock(); } catch {}
+    if (port) disconnect();
+  }
+}
+
+function handleLine(line) {
+  if (line.startsWith("D,")) {
+    const p = line.split(",").map(Number);
+    if (p.length !== 4 || !p.slice(1).every(Number.isInteger)) { badSamples++; return; }
+    // An exact 0,0,0 never happens with gravity present: it's a corrupted SPI read
+    if (p[1] === 0 && p[2] === 0 && p[3] === 0) { badSamples++; return; }
+    // Full-resolution ADXL345 output is 13-bit (-4096..4095 = +/-16 g); anything beyond is corrupt
+    if (p.slice(1).some(v => v < -4096 || v > 4095)) { badSamples++; return; }
+    addSample(p[1] * gPerLsb, p[2] * gPerLsb, p[3] * gPerLsb);
+  } else if (line.startsWith("#ERROR") || line.startsWith("#WARN")) {
+    sensorErrors++;
+    showMsg(new Date().toLocaleTimeString() + "  " + line.slice(1));
+  } else if (line.startsWith("#")) {
+    const r = /rate=(\d+(?:\.\d+)?)/.exec(line), s = /g_per_lsb=([\d.]+)/.exec(line);
+    if (s) gPerLsb = +s[1];
+    if (r && +r[1] !== rate) { rate = +r[1]; allocBuffers(); }
+  }
+}
+
+// Orientation only trusts samples whose magnitude is close to normal gravity:
+// rotating the board never changes |a|, but a knock or shock does.
+const SHOCK_TOLERANCE = 0.15;   // fraction of gravity magnitude
+let gRef = 1, shockSamples = 0, shockRun = 0;
+
+function addSample(x, y, z) {
+  rxCount++;
+  const a = [x, y, z];
+  const mag = Math.hypot(x, y, z);
+  if (!lpInit) { lp = a.slice(); lpOri = a.slice(); gRef = mag || 1; lpInit = true; }
+  const kHp = 1 - Math.exp(-1 / (rate * 0.5));    // 0.5 s time constant: gravity / tilt
+  const kOri = 1 - Math.exp(-1 / (rate * 0.08));  // 80 ms: smooth but responsive display
+  const kRef = 1 - Math.exp(-1 / (rate * 5));     // 5 s: slowly track this sensor's gravity reading
+  for (let i = 0; i < 3; i++) lp[i] += kHp * (a[i] - lp[i]);
+
+  if (Math.abs(mag - gRef) < SHOCK_TOLERANCE * gRef) {
+    for (let i = 0; i < 3; i++) lpOri[i] += kOri * (a[i] - lpOri[i]);
+    gRef += kRef * (mag - gRef);
+    shockRun = 0;
+  } else {
+    shockSamples++;
+    // Rejected continuously for 0.5 s: the reference is wrong (e.g. started mid-shock), so reset it
+    if (++shockRun > rate * 0.5) { gRef = Math.hypot(...lp) || 1; shockRun = 0; }
+  }
+  if (paused) return;
+  for (let i = 0; i < 3; i++) { raw[i][head] = a[i]; hpf[i][head] = a[i] - lp[i]; }
+  head = (head + 1) % cap;
+  if (count < cap) count++;
+}
+
+// ---------- controls ----------
+// Zero uses the live smoothed gravity (~80 ms average), so it works even while paused
+$("zero").onclick = () => {
+  if (!lpInit || !validGravity(lpOri)) {
+    showMsg("Can't zero: no valid gravity reading yet. Check samples are arriving.");
+    return;
+  }
+  zeroVec = lpOri.slice();
+  saveZero(zeroVec);
+  updateZeroFrame();
+  showMsg("Zeroed.", 2000);
+};
+$("pause").onclick = () => {
+  paused = !paused;
+  $("pause").textContent = paused ? "Resume" : "Pause";
+  $("pause").classList.toggle("primary", paused);
+};
+
+setInterval(() => {
+  if (port) {
+    $("status").textContent = (paused ? "PAUSED · " : "") + `${rxCount} samples/s · ${rate} Hz configured` +
+      (badSamples || sensorErrors ? ` · ${badSamples} bad samples, ${sensorErrors} sensor errors` : "");
+  }
+  rxCount = 0;
+}, 1000);
+
+// ---------- 3D view ----------
+const host = $("scene");
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(3.2, 2.6, 3.6);
+camera.lookAt(0, 0, 0);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(3, 5, 2); scene.add(sun);
+
+const grid = new THREE.GridHelper(4, 8, 0x888888, 0x888888);
+grid.position.y = -0.9; grid.material.opacity = 0.35; grid.material.transparent = true;
+scene.add(grid);
+
+// Scene layers, outermost first:
+//   poseGroup    fixed screen pose: axis Z shown pointing up
+//   boardGroup   the data axes (accelerometer after the axis map) + arrows, tilted live since zero
+//   modelHolder  the model, turned relative to the arrows with the "Rotate model" buttons
+const poseGroup = new THREE.Group(); scene.add(poseGroup);
+poseGroup.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);  // +Z -> screen up
+const boardGroup = new THREE.Group(); poseGroup.add(boardGroup);
+const modelHolder = new THREE.Group(); boardGroup.add(modelHolder);
+const customHolder = new THREE.Group(); modelHolder.add(customHolder);   // loaded STL/OBJ/GLB
+const pcb = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.2, 0.08),   // lies in XY, Z = board normal
+  new THREE.MeshStandardMaterial({ color: 0x1f6f4a, roughness: 0.7 }));
+modelHolder.add(pcb);
+const chip = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.06),
+  new THREE.MeshStandardMaterial({ color: 0x222222 }));
+chip.position.z = 0.07; modelHolder.add(chip);
+
+// Down arrow in world (fixed)
+scene.add(new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(-1.6, 0.6, -1.2), 0.9, 0x999999, 0.15, 0.08));
+
+const cssColor = name => new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue(name).trim());
+let axisArrows = [];
+function makeLabel(text, color) {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d"); g.fillStyle = color; g.font = "bold 44px system-ui"; g.textAlign = "center";
+  g.textBaseline = "middle"; g.fillText(text, 32, 34);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  s.scale.set(0.3, 0.3, 0.3); return s;
+}
+function updateAxisArrows() {
+  axisArrows.forEach(o => boardGroup.remove(o)); axisArrows = [];
+  const names = ["X", "Y", "Z"], vars = ["--c1", "--c2", "--c3"];
+  for (let i = 0; i < 3; i++) {
+    // Data axes X/Y/Z; the axis map decides which accelerometer axis drives each one
+    const d = new THREE.Vector3(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0);
+    const col = cssColor(vars[i]);
+    const arrow = new THREE.ArrowHelper(d, new THREE.Vector3(0, 0, 0.08), 1.0, col, 0.16, 0.09);
+    // Draw the arrows on top so they stay visible inside a loaded model
+    [arrow.line, arrow.cone].forEach(o => { o.material.depthTest = false; o.renderOrder = 999; });
+    const label = makeLabel(names[i], "#" + col.getHexString());
+    label.renderOrder = 999;
+    label.position.copy(d.clone().multiplyScalar(1.18)).add(new THREE.Vector3(0, 0, 0.08));
+    boardGroup.add(arrow, label); axisArrows.push(arrow, label);
+  }
+}
+
+// ---------- custom model (STL / OBJ / GLB) ----------
+// modelAlign turns the model relative to the data axes (arrows); set with the Rotate model buttons.
+let modelAlign = new THREE.Quaternion();
+try {
+  const q = JSON.parse(localStorage.getItem("accelViewer.modelToAxes"));
+  if (Array.isArray(q) && q.length === 4) modelAlign.fromArray(q);
+} catch {}
+function updatePose() { modelHolder.quaternion.copy(modelAlign); }
+
+function parseModel(name, buffer) {
+  const ext = name.split(".").pop().toLowerCase();
+  if (ext === "stl") {
+    const geo = new THREE.STLLoader().parse(buffer);
+    if (!geo.attributes.normal) geo.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({
+      color: geo.hasColors ? 0xffffff : 0x9aa4b2, vertexColors: !!geo.hasColors, roughness: 0.6, metalness: 0.1 });
+    return Promise.resolve(new THREE.Mesh(geo, mat));
+  }
+  if (ext === "obj") {
+    const obj = new THREE.OBJLoader().parse(new TextDecoder().decode(buffer));
+    obj.traverse(o => { if (o.isMesh && !o.material.map) o.material = new THREE.MeshStandardMaterial({ color: 0x9aa4b2, roughness: 0.6 }); });
+    return Promise.resolve(obj);
+  }
+  if (ext === "glb") {
+    return new Promise((res, rej) => new THREE.GLTFLoader().parse(buffer, "", g => res(g.scene), rej));
+  }
+  return Promise.reject(new Error("Unsupported file type ." + ext + " (use STL, OBJ or GLB)"));
+}
+
+async function showModel(name, buffer) {
+  const obj = await parseModel(name, buffer);
+  // Centre it and scale the largest dimension to 2 units, whatever the file's units
+  const box = new THREE.Box3().setFromObject(obj), size = box.getSize(new THREE.Vector3());
+  obj.position.sub(box.getCenter(new THREE.Vector3()));
+  const fitted = new THREE.Group(); fitted.add(obj);
+  fitted.scale.setScalar(2 / Math.max(size.x, size.y, size.z, 1e-9));
+  customHolder.clear(); customHolder.add(fitted);
+  pcb.visible = chip.visible = false;
+  $("removeModel").disabled = false;
+  $("modelInfo").textContent = `Model: ${name}.`;
+}
+
+function clearModel() {
+  customHolder.clear();
+  pcb.visible = chip.visible = true;
+  $("removeModel").disabled = true;
+  $("modelInfo").textContent = "Load an STL, OBJ or GLB to replace the default board.";
+}
+
+// Remember the last model in IndexedDB so it reloads with the page (best effort)
+function modelDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("accelViewer", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("model");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function storeModel(rec) {
+  try {
+    const db = await modelDb(), tx = db.transaction("model", "readwrite");
+    rec ? tx.objectStore("model").put(rec, "last") : tx.objectStore("model").delete("last");
+  } catch {}
+}
+async function restoreModel() {
+  try {
+    const db = await modelDb();
+    const rec = await new Promise((res, rej) => {
+      const r = db.transaction("model").objectStore("model").get("last");
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    if (rec) await showModel(rec.name, rec.buffer);
+  } catch {}
+}
+
+$("loadModel").onclick = () => $("modelFile").click();
+$("modelFile").onchange = async e => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  try {
+    const buffer = await file.arrayBuffer();
+    await showModel(file.name, buffer);
+    storeModel({ name: file.name, buffer });
+  } catch (err) {
+    showMsg("Could not load model: " + err.message, 8000);
+  }
+};
+function rotateModel(axis) {
+  const q = new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 2);
+  modelAlign.premultiply(q);   // rotate about the arrows' axes
+  try { localStorage.setItem("accelViewer.modelToAxes", JSON.stringify(modelAlign.toArray())); } catch {}
+  updatePose();
+}
+$("rotX").onclick = () => rotateModel(new THREE.Vector3(1, 0, 0));
+$("rotY").onclick = () => rotateModel(new THREE.Vector3(0, 1, 0));
+$("rotZ").onclick = () => rotateModel(new THREE.Vector3(0, 0, 1));
+$("removeModel").onclick = () => { clearModel(); storeModel(null); };
+
+// ---------- axis mapping controls ----------
+const matMul = (A, B) => A.map(r => [0, 1, 2].map(j => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
+const det3 = m => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                  m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+const ROT90 = [
+  [[1, 0, 0], [0, 0, -1], [0, 1, 0]],   // about X
+  [[0, 0, 1], [0, 1, 0], [-1, 0, 0]],   // about Y
+  [[0, -1, 0], [1, 0, 0], [0, 0, 1]],   // about Z
+];
+const INVERT = i => IDENTITY.map((r, k) => r.map(v => (k === i ? -v : v)));
+
+function setAxisMap(m) {
+  axisMap = m;
+  try { localStorage.setItem("accelViewer.axisMap", JSON.stringify(m)); } catch {}
+  updateAxisInfo();
+  updateZeroFrame();   // redraws the arrows
+}
+function updateAxisInfo() {
+  const parts = axisMap.map((r, i) => {
+    const j = r.findIndex(v => v !== 0);
+    return `${AX[i]} ← ${r[j] < 0 ? "−" : "+"}chip ${AX[j]}`;
+  });
+  const mirrored = det3(axisMap) < 0;
+  $("axisInfo").innerHTML = parts.join(" · ") +
+    (mirrored ? ` · <b style="color:var(--warn)">mirrored: one tilt direction will be reversed; invert one more axis to fix</b>` : "");
+}
+[0, 1, 2].forEach(i => {
+  $("axRot" + AX[i]).onclick = () => setAxisMap(matMul(ROT90[i], axisMap));
+  $("axInv" + AX[i]).onclick = () => setAxisMap(matMul(INVERT(i), axisMap));
+});
+$("axReset").onclick = () => setAxisMap(IDENTITY.map(r => r.slice()));
+
+updateAxisInfo();
+updatePose();
+updateZeroFrame();
+restoreModel();
+
+function resize3d() {
+  const w = host.clientWidth; renderer.setSize(w, w, false);
+  renderer.domElement.style.width = "100%"; renderer.domElement.style.height = "100%";
+}
+new ResizeObserver(resize3d).observe(host); resize3d();
+
+function updateOrientation() {
+  const a = norm(lpOri), z = norm(zeroVec);
+  // Tilt since zero, in the model's own axes (chip data passed through the axis map).
+  // At rest the mapped reading equals the mapped zero, so changing the map never moves
+  // the picture; it only changes which way the model moves when you tilt the real thing.
+  const b = mapVec(a), b0 = mapVec(z);
+  const rel = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(...b), new THREE.Vector3(...b0));
+  boardGroup.quaternion.copy(rel);
+
+  // Down axis = sensor axis most aligned with gravity at zero (measured vector points up).
+  const zm = mapVec(z);   // reported in your (mapped) axes
+  let best = 0; for (let i = 1; i < 3; i++) if (Math.abs(zm[i]) > Math.abs(zm[best])) best = i;
+  const sign = zm[best] > 0 ? "−" : "+";
+  $("downAxis").textContent = `${sign}${AX[best]} (${(Math.abs(zm[best]) * 100).toFixed(0)}% aligned)`;
+  const dot = Math.max(-1, Math.min(1, a[0] * z[0] + a[1] * z[1] + a[2] * z[2]));
+  $("tilt").textContent = (Math.acos(dot) * 180 / Math.PI).toFixed(1) + "°";
+  $("gvec").textContent = mapVec(lpOri).map(v => v.toFixed(3)).join(", ") + " g";
+  $("gmag").textContent = Math.hypot(...lpOri).toFixed(3) + " g";
+  $("shocks").textContent = `${shockSamples} samples`;
+}
+
+// ---------- plots ----------
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
+  if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+    c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { g, w: r.width, h: r.height };
+}
+
+// Returns the latest n samples per channel in the chosen frame.
+function getWindow(n) {
+  const src = $("hp").checked ? hpf : raw, mount = $("frame").value === "mount";
+  const e = M0.elements; // column-major
+  const out = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  for (let k = 0; k < n; k++) {
+    const idx = (head - n + k + cap) % cap;
+    const x = src[0][idx], y = src[1][idx], z = src[2][idx];
+    if (mount) {
+      // mount frame: Y is vertical. Output order: vertical, H1 (mount X), H2 (mount Z)
+      const mx = e[0] * x + e[3] * y + e[6] * z;
+      const my = e[1] * x + e[4] * y + e[7] * z;
+      const mz = e[2] * x + e[5] * y + e[8] * z;
+      out[0][k] = my; out[1][k] = mx; out[2][k] = mz;
+    } else {
+      const m = axisMap;
+      out[0][k] = m[0][0] * x + m[0][1] * y + m[0][2] * z;
+      out[1][k] = m[1][0] * x + m[1][1] * y + m[1][2] * z;
+      out[2][k] = m[2][0] * x + m[2][1] * y + m[2][2] * z;
+    }
+  }
+  return out;
+}
+
+function niceStep(range, target) {
+  const raw = range / target, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+  return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+}
+
+function drawAxes(g, w, h, pad, xMin, xMax, yMin, yMax, xLabel, fmtY) {
+  const css = getComputedStyle(document.documentElement);
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = css.getPropertyValue("--grid"); g.fillStyle = css.getPropertyValue("--muted");
+  g.lineWidth = 1; g.font = "11px system-ui";
+  const X = v => pad.l + (v - xMin) / (xMax - xMin) * (w - pad.l - pad.r);
+  const Y = v => h - pad.b - (v - yMin) / (yMax - yMin) * (h - pad.t - pad.b);
+  const ys = niceStep(yMax - yMin, 5);
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (let v = Math.ceil(yMin / ys) * ys; v <= yMax + 1e-9; v += ys) {
+    g.beginPath(); g.moveTo(pad.l, Y(v)); g.lineTo(w - pad.r, Y(v)); g.stroke();
+    g.fillText(fmtY(v), pad.l - 6, Y(v));
+  }
+  const xs = niceStep(xMax - xMin, 8);
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (let v = Math.ceil(xMin / xs) * xs; v <= xMax + 1e-9; v += xs) {
+    g.beginPath(); g.moveTo(X(v), pad.t); g.lineTo(X(v), h - pad.b); g.stroke();
+    g.fillText(+v.toFixed(3), X(v), h - pad.b + 4);
+  }
+  g.textAlign = "right"; g.fillText(xLabel, w - pad.r, h - 14);
+  return { X, Y };
+}
+
+function channelNames() {
+  return $("frame").value === "mount" ? ["Vertical", "Horizontal 1", "Horizontal 2"] : ["X", "Y", "Z"];
+}
+const chanColors = () => ["--c1", "--c2", "--c3"].map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+
+function drawTime(data, n) {
+  const { g, w, h } = setupCanvas($("plot"));
+  const pad = { l: 52, r: 12, t: 8, b: 30 };
+  let lo = Infinity, hi = -Infinity;
+  data.forEach(ch => { for (let k = 0; k < n; k++) { if (ch[k] < lo) lo = ch[k]; if (ch[k] > hi) hi = ch[k]; } });
+  if (!isFinite(lo)) { lo = -1; hi = 1; }
+  const span = Math.max(hi - lo, 0.02), mid = (hi + lo) / 2;
+  lo = mid - span * 0.6; hi = mid + span * 0.6;
+  const secs = n / rate;
+  const { X, Y } = drawAxes(g, w, h, pad, -secs, 0, lo, hi, "time (s)", v => v.toFixed(Math.max(0, -Math.floor(Math.log10(span)) + 1)) + " g");
+  const cols = chanColors(), px = Math.max(1, Math.floor(w - pad.l - pad.r));
+  data.forEach((ch, ci) => {
+    g.strokeStyle = cols[ci]; g.lineWidth = 1; g.beginPath();
+    // min/max per pixel column keeps short spikes visible
+    for (let p = 0; p < px; p++) {
+      const a = Math.floor(p * n / px), b = Math.max(a + 1, Math.floor((p + 1) * n / px));
+      let mn = Infinity, mx = -Infinity;
+      for (let k = a; k < b && k < n; k++) { if (ch[k] < mn) mn = ch[k]; if (ch[k] > mx) mx = ch[k]; }
+      if (!isFinite(mn)) continue;
+      const xx = pad.l + p + 0.5;
+      if (p === 0) g.moveTo(xx, Y(mn));
+      g.lineTo(xx, Y(mn)); g.lineTo(xx, Y(mx));
+    }
+    g.stroke();
+  });
+}
+
+// Radix-2 FFT, in place
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ar = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+        const ai = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+        re[i + k + len / 2] = re[i + k] - ar; im[i + k + len / 2] = im[i + k] - ai;
+        re[i + k] += ar; im[i + k] += ai;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+
+function spectrum(ch, n) {
+  // Largest power of two up to the chosen FFT size that the available data allows
+  let N = 1; while (N * 2 <= n && N < +$("fftSize").value) N *= 2;
+  if (N < 64) return null;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  let mean = 0; for (let k = n - N; k < n; k++) mean += ch[k]; mean /= N;
+  for (let k = 0; k < N; k++) {
+    const wnd = 0.5 - 0.5 * Math.cos(2 * Math.PI * k / (N - 1));
+    re[k] = (ch[n - N + k] - mean) * wnd;
+  }
+  fft(re, im);
+  const mag = new Float32Array(N / 2);
+  for (let k = 1; k < N / 2; k++) mag[k] = 4 * Math.hypot(re[k], im[k]) / N; // Hann amplitude correction (x2)
+  return { mag, df: rate / N };
+}
+
+const toDb = v => 20 * Math.log10(Math.max(v, 1e-7));
+let lastSpecs = [], specAxes = null;
+
+// Top local maxima across all channels, at least minSepHz apart
+function findPeaks(specs, count, minSepHz) {
+  const cands = [];
+  specs.forEach((s, ci) => {
+    if (!s) return;
+    for (let k = 2; k < s.mag.length - 1; k++)
+      if (s.mag[k] > s.mag[k - 1] && s.mag[k] >= s.mag[k + 1]) cands.push({ f: k * s.df, v: s.mag[k], ci });
+  });
+  cands.sort((a, b) => b.v - a.v);
+  const picked = [];
+  for (const c of cands) {
+    if (picked.every(p => Math.abs(p.f - c.f) > minSepHz)) picked.push(c);
+    if (picked.length === count) break;
+  }
+  return picked;
+}
+
+function drawSpectra(specs) {
+  lastSpecs = specs;
+  const { g, w, h } = setupCanvas($("fft"));
+  const pad = { l: 60, r: 12, t: 16, b: 30 };
+  const db = $("fftScale").value === "db";
+  let peak = 0; specs.forEach(s => s && s.mag.forEach(v => { if (v > peak) peak = v; }));
+  peak = Math.max(peak, 1e-4);
+
+  let lo, hi, fmt, val;
+  if (db) {
+    hi = Math.ceil((toDb(peak) + 5) / 10) * 10; lo = hi - 90;
+    fmt = v => v.toFixed(0) + " dB"; val = toDb;
+  } else {
+    lo = 0; hi = peak * 1.2;
+    const dec = Math.max(0, -Math.floor(Math.log10(niceStep(hi, 5))));
+    fmt = v => v.toFixed(dec) + " g"; val = v => v;
+  }
+  const { X, Y } = drawAxes(g, w, h, pad, 0, rate / 2, lo, hi, "frequency (Hz)", fmt);
+  specAxes = { X, Y, pad, w, h, db };
+  const cols = chanColors();
+  specs.forEach((s, ci) => {
+    if (!s) return;
+    g.strokeStyle = cols[ci]; g.lineWidth = 1.2; g.beginPath();
+    for (let k = 1; k < s.mag.length; k++) {
+      const xx = X(k * s.df), yy = Y(Math.max(lo, val(s.mag[k])));
+      k === 1 ? g.moveTo(xx, yy) : g.lineTo(xx, yy);
+    }
+    g.stroke();
+  });
+
+  // Label the three biggest peaks
+  const css = getComputedStyle(document.documentElement);
+  g.font = "11px system-ui"; g.textAlign = "center"; g.textBaseline = "bottom";
+  for (const p of findPeaks(specs, 3, rate / 100)) {
+    const xx = X(p.f), yy = Y(val(p.v));
+    g.fillStyle = cols[p.ci];
+    g.beginPath(); g.arc(xx, yy, 3, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = css.getPropertyValue("--text");
+    g.fillText(`${p.f.toFixed(1)} Hz`, xx, Math.max(pad.t + 10, yy - 5));
+  }
+
+  const s0 = specs.find(s => s);
+  $("fftInfo").textContent = s0
+    ? `resolution ${s0.df.toFixed(2)} Hz · covers last ${(s0.mag.length * 2 / rate).toFixed(2)} s`
+    : "waiting for data…";
+}
+
+$("fft").addEventListener("mousemove", e => {
+  if (!specAxes || !lastSpecs.length) return;
+  const r = e.currentTarget.getBoundingClientRect(), { pad, w } = specAxes;
+  const f = (e.clientX - r.left - pad.l) / (w - pad.l - pad.r) * (rate / 2);
+  if (f < 0 || f > rate / 2) return;
+  const names = channelNames(), cols = chanColors();
+  const parts = lastSpecs.map((s, ci) => {
+    if (!s) return "";
+    const v = s.mag[Math.min(s.mag.length - 1, Math.max(1, Math.round(f / s.df)))];
+    const txt = specAxes.db ? `${toDb(v).toFixed(1)} dB` : `${v.toFixed(4)} g`;
+    return `<span style="color:${cols[ci]}">${names[ci]}: ${txt}</span>`;
+  });
+  $("fftHover").innerHTML = `<b>${f.toFixed(1)} Hz</b> &nbsp; ` + parts.join(" &nbsp; ");
+});
+
+function updateStats(data, n, specs) {
+  const names = channelNames(), cols = chanColors();
+  $("stats").innerHTML = data.map((ch, ci) => {
+    let ss = 0, pk = 0, mean = 0;
+    for (let k = 0; k < n; k++) mean += ch[k]; mean /= n || 1;
+    for (let k = 0; k < n; k++) { const d = ch[k] - mean; ss += d * d; if (Math.abs(d) > pk) pk = Math.abs(d); }
+    let dom = "n/a";
+    const s = specs[ci];
+    if (s) { let bi = 1; for (let k = 2; k < s.mag.length; k++) if (s.mag[k] > s.mag[bi]) bi = k; dom = (bi * s.df).toFixed(1); }
+    return `<tr><td><span class="sw" style="background:${cols[ci]}"></span>${names[ci]}</td>` +
+           `<td>${Math.sqrt(ss / (n || 1)).toFixed(4)}</td><td>${pk.toFixed(4)}</td><td>${dom}</td></tr>`;
+  }).join("");
+}
+
+// ---------- render loop ----------
+let lastStats = 0;
+function frame(t) {
+  updateOrientation();
+  renderer.render(scene, camera);
+  const n = Math.min(count, Math.round(rate * +$("window").value));
+  if (n > 1) {
+    const data = getWindow(n);
+    drawTime(data, n);
+    if (t - lastStats > 250) {   // spectrum + stats 4x per second
+      lastStats = t;
+      // FFT uses its own span of the buffer, independent of the time-plot window
+      const nf = Math.min(count, +$("fftSize").value);
+      const specs = getWindow(nf).map(ch => spectrum(ch, nf));
+      drawSpectra(specs);
+      updateStats(data, n, specs);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

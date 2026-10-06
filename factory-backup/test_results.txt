@@ -1,0 +1,21 @@
+Thanks for buying a TinyS3[D]!
+
+Your board has been tested and here are the results for your reference.
+
+Test Date & Time: 06/21/2026, 10:26:06 <- Australia
+MAC Address:                90:70:69:2f:33:38
+
+PSRAM: 8270704 bytes
+FLASH: 3843072 KB
+VBAT Sense Check: PASS
+VBUS Sense Check: Pass
+GPIO Test: PASS
+WiFi Test: PASS
+WiFi Connection Time: 0.014001848 secs
+
+This board is good to ship! I hope you enjoy using it :)
+
+Cheers,
+Seon
+Unexpected Maker
+http://unexpectedmaker.com

@@ -1,0 +1,12 @@
+# PlatformIO build output
+.pio/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Recorded data and local secrets
+*.dlog
+secrets.*
