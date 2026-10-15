@@ -1,0 +1,47 @@
+{
+  "feature": "core",
+  "version": 1,
+  "multi_instance": false,
+  "description": "Present on every logger: identity, status LED, timekeeping, MQTT connection and housekeeping commands.",
+  "config": {
+    "name": { "type": "string", "default": "", "description": "Human label, e.g. vib-01. Defaults to the serial number." },
+    "groups": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Groups this logger answers commands for, e.g. site-a." },
+    "mqtt_host": { "type": "string", "default": "", "description": "Broker host name or IP. Empty: find it by mDNS." },
+    "mqtt_port": { "type": "integer", "default": 1883, "min": 1, "max": 65535 },
+    "mqtt_user": { "type": "string", "default": "" },
+    "mqtt_password": { "type": "string", "default": "", "secret": true },
+    "ntp_server": { "type": "string", "default": "", "description": "Empty: use the MQTT broker's host." },
+    "ntp_interval_s": { "type": "integer", "default": 3600, "min": 60, "unit": "s" },
+    "status_interval_s": { "type": "integer", "default": 30, "min": 5, "unit": "s" },
+    "led_brightness": { "type": "number", "default": 0.2, "min": 0, "max": 1, "description": "0 turns the status LED off." },
+    "temp_warning_c": { "type": "number", "default": 55, "unit": "degC", "description": "Raise temp_high above this enclosure temperature." }
+  },
+  "status": {
+    "temperature_c": { "type": "number", "unit": "degC", "description": "Enclosure/board temperature from the best available sensor." },
+    "time": { "type": "object", "fields": {
+      "synced": { "type": "boolean" },
+      "source": { "type": "string", "enum": ["ntp", "manual", "gps"] },
+      "last_sync_age_s": { "type": "integer", "unit": "s" }
+    } },
+    "free_heap": { "type": "integer", "unit": "bytes" }
+  },
+  "commands": {
+    "identify": { "description": "Flash the status LED so this logger can be found.",
+      "args": { "seconds": { "type": "integer", "default": 10, "min": 1, "max": 300 } } },
+    "mark": { "description": "Write a note marker into the data file.",
+      "args": { "text": { "type": "string" } } },
+    "get_config": { "description": "Re-publish the config topic.", "args": {} },
+    "set_config": { "description": "Apply a partial config: { instance: { field: value } }. The result says whether a restart is needed.",
+      "args": { "changes": { "type": "object" } } },
+    "sync_time": { "description": "Sync with the NTP server now.", "args": {} },
+    "set_time": { "description": "Set the clock manually (bench use, no network).",
+      "args": { "utc_ms": { "type": "integer" } } },
+    "reboot": { "description": "Restart the logger (acknowledges first).", "args": {} }
+  },
+  "streams": [],
+  "events": {
+    "time_synced": "The clock was set or corrected.",
+    "temp_high": "Enclosure temperature above temp_warning_c.",
+    "config_changed": "Config was changed (by set_config or a new config file)."
+  }
+}

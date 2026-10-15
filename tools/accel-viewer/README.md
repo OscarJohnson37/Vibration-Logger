@@ -1,12 +1,14 @@
 # Accel Viewer (temporary bench tool)
 
-Live 3D orientation, vibration plot and spectrum for the breadboard ADXL345 test firmware.
+Live 3D orientation, vibration plot and spectrum for the bench test firmware.
 
 ## Use
 
-1. Flash the test firmware: `cd firmware`, then `pio run -e bench_adxl345 -t upload`
-   (source: [firmware/loggers/bench_adxl345/](../../firmware/loggers/bench_adxl345/main.cpp)).
-   Press RST on the board if it doesn't start streaming.
+1. Flash a bench firmware from `firmware/`, then press RST on the board if it doesn't start streaming:
+   - ADXL355: `pio run -e bench_adxl355 -t upload`
+     ([source](../../firmware/loggers/bench_adxl355/main.cpp): the real ADXL355 driver, 4000 Hz)
+   - ADXL345: `pio run -e bench_adxl345 -t upload`
+     ([source](../../firmware/loggers/bench_adxl345/main.cpp): 800 Hz)
 2. Close any `pio device monitor` (only one program can hold the serial port).
 3. Open `index.html` in **Chrome or Edge** (Web Serial isn't supported in Firefox/Safari).
 4. Click **Connect** and pick the TinyS3 port.
@@ -23,8 +25,9 @@ If the page says Web Serial is unavailable when opened as a file, serve it local
 ## Serial format it expects
 
 ```
-#ADXL345 rate=800 g_per_lsb=0.0039     info line (rate and scale)
-D,<x>,<y>,<z>                           one sample, raw counts
+#ADXL355 rate=4000 g_per_lsb=0.000015625 raw_max=524287   info line (rate, scale, raw range)
+#ERROR <message>                                         shown in the viewer for 5 s
+D,<x>,<y>,<z>                                            one sample, raw counts
 ```
 
 ## Remove

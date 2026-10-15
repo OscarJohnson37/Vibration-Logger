@@ -152,7 +152,7 @@
 "use strict";
 
 // ---------- state ----------
-let rate = 800, gPerLsb = 0.0039;
+let rate = 800, gPerLsb = 0.0039, rawMax = 4095;  // ADXL345 defaults; the info line overrides them
 const MAX_SECONDS = 10;
 let cap = 0, head = 0, count = 0;
 let raw = [], hpf = [];                  // ring buffers [x,y,z] in g
@@ -280,15 +280,17 @@ function handleLine(line) {
     if (p.length !== 4 || !p.slice(1).every(Number.isInteger)) { badSamples++; return; }
     // An exact 0,0,0 never happens with gravity present: it's a corrupted SPI read
     if (p[1] === 0 && p[2] === 0 && p[3] === 0) { badSamples++; return; }
-    // Full-resolution ADXL345 output is 13-bit (-4096..4095 = +/-16 g); anything beyond is corrupt
-    if (p.slice(1).some(v => v < -4096 || v > 4095)) { badSamples++; return; }
+    // Beyond the sensor's raw range is impossible: a corrupted read (ADXL345 ±4095, ADXL355 ±524287)
+    if (p.slice(1).some(v => v < -rawMax - 1 || v > rawMax)) { badSamples++; return; }
     addSample(p[1] * gPerLsb, p[2] * gPerLsb, p[3] * gPerLsb);
   } else if (line.startsWith("#ERROR") || line.startsWith("#WARN")) {
     sensorErrors++;
     showMsg(new Date().toLocaleTimeString() + "  " + line.slice(1));
   } else if (line.startsWith("#")) {
-    const r = /rate=(\d+(?:\.\d+)?)/.exec(line), s = /g_per_lsb=([\d.]+)/.exec(line);
+    const r = /rate=(\d+(?:\.\d+)?)/.exec(line), s = /g_per_lsb=([\d.eE+-]+)/.exec(line);
+    const m = /raw_max=(\d+)/.exec(line);
     if (s) gPerLsb = +s[1];
+    if (m) rawMax = +m[1];
     if (r && +r[1] !== rate) { rate = +r[1]; allocBuffers(); }
   }
 }

@@ -1,0 +1,38 @@
+{
+  "feature": "accel",
+  "version": 1,
+  "multi_instance": true,
+  "description": "A 3-axis accelerometer producing one stream named after the instance. Implemented by the ADXL355, ADXL345 and the simulated sensor (sim); info.limits narrows ranges to what the hardware supports.",
+  "config": {
+    "range_g": { "type": "number", "enum": [2, 4, 8, 16], "default": 8, "unit": "g", "applies": "new_file" },
+    "odr_hz": { "type": "number", "enum": [125, 250, 500, 800, 1000, 1600, 2000, 3200, 4000], "default": 4000, "unit": "Hz", "applies": "new_file",
+      "description": "Output data rate. Usable bandwidth is roughly a quarter of this." },
+    "hpf_hz": { "type": "number", "default": 0, "min": 0, "unit": "Hz", "applies": "new_file", "description": "Sensor high-pass filter corner; 0 = off." },
+    "mounting": { "type": "object", "applies": "new_file", "description": "How the sensor is installed. Stored as metadata; data stays in sensor axes.",
+      "fields": {
+        "axis_map": { "type": "array", "default": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "description": "3x3, rows = reported axes, columns = sensor axes." },
+        "axis_names": { "type": "array", "items": { "type": "string" }, "default": ["x", "y", "z"] },
+        "location": { "type": "string", "default": "" }
+      } },
+    "impl": { "type": "object", "default": {}, "description": "Implementation-specific settings (e.g. the simulator's waveforms)." }
+  },
+  "status": {
+    "ok": { "type": "boolean" },
+    "frames": { "type": "integer", "description": "Frames recorded this boot." },
+    "gaps": { "type": "integer" },
+    "clipped_blocks": { "type": "integer" },
+    "errors": { "type": "integer", "description": "Bus/sensor errors this boot." },
+    "temperature_c": { "type": "number", "unit": "degC", "description": "Sensor die temperature, if the hardware has one." }
+  },
+  "commands": {
+    "self_test": { "description": "Run the sensor's built-in self-test. Returns busy while recording.", "args": {} }
+  },
+  "streams": [
+    { "name": "{instance}", "rate_hz": "{config.odr_hz}",
+      "channels": [ { "name": "x", "unit": "g" }, { "name": "y", "unit": "g" }, { "name": "z", "unit": "g" } ] }
+  ],
+  "events": {
+    "sensor_error": "The sensor stopped responding or returned impossible values.",
+    "clipping": "Samples hit the full-scale range."
+  }
+}

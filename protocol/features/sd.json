@@ -1,0 +1,22 @@
+{
+  "feature": "sd",
+  "version": 1,
+  "multi_instance": false,
+  "description": "SD card storage. Files are written under /logs/<device_id>/ (see FILE_FORMAT.md).",
+  "config": {
+    "bus_width": { "type": "integer", "enum": [1, 4], "default": 4, "applies": "restart", "description": "SDIO data lines. 1-bit frees three pins and is still far faster than needed." },
+    "freq_khz": { "type": "integer", "default": 20000, "min": 400, "max": 40000, "unit": "kHz", "applies": "restart", "description": "Bus clock. Lower it for long or breadboard wiring." }
+  },
+  "status": {
+    "present": { "type": "boolean" },
+    "free_mb": { "type": "integer", "unit": "MB" },
+    "total_mb": { "type": "integer", "unit": "MB" },
+    "write_errors": { "type": "integer" }
+  },
+  "commands": {},
+  "streams": [],
+  "events": {
+    "sd_full": "Less than 1% free; recording stops.",
+    "sd_error": "A write or mount failed."
+  }
+}

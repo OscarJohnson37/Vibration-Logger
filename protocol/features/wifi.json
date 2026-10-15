@@ -1,0 +1,31 @@
+{
+  "feature": "wifi",
+  "version": 1,
+  "multi_instance": false,
+  "description": "WiFi connection. Tries known networks in order; if none is found, can start its own hotspot serving the logger's web page.",
+  "config": {
+    "networks": { "type": "array", "default": [], "description": "Tried in order, e.g. the master's network first, then a bench network.",
+      "items": { "type": "object", "fields": {
+        "ssid": { "type": "string" },
+        "password": { "type": "string", "secret": true }
+      } } },
+    "hotspot": { "type": "string", "enum": ["no_network", "always", "never"], "default": "no_network",
+      "description": "When to run the logger's own hotspot." },
+    "hotspot_password": { "type": "string", "default": "", "secret": true, "description": "Empty: an open hotspot (not recommended)." },
+    "antenna": { "type": "string", "enum": ["internal", "external"], "default": "internal", "applies": "restart" },
+    "enabled": { "type": "boolean", "default": true, "description": "Turn WiFi off entirely to save battery." }
+  },
+  "status": {
+    "mode": { "type": "string", "enum": ["station", "hotspot", "off"] },
+    "connected": { "type": "boolean" },
+    "ssid": { "type": "string" },
+    "ip": { "type": "string" },
+    "rssi_dbm": { "type": "integer", "unit": "dBm" }
+  },
+  "commands": {},
+  "streams": [],
+  "events": {
+    "wifi_connected": "Joined a network.",
+    "wifi_lost": "Lost the network."
+  }
+}

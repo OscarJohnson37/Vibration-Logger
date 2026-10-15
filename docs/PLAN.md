@@ -1,6 +1,6 @@
 # Logger Ecosystem: Architecture Plan
 
-Status: draft, updated 2026-10-06 (phase 1 complete)
+Status: draft, updated 2026-10-08 (feature model added; phase 2 in progress)
 
 ## Goals
 
@@ -57,7 +57,7 @@ card. Analysis code never needs to know how the data arrived.
 | Variant                                        | Sinks                                | Network use                                                                                                                          | Power            |
 | ---------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
 | **Portable vibration logger (this one)** | SD only                              | Usually connected to the master over WiFi for time sync, config, status and commands, but never required; data is not sent over WiFi | Battery          |
-| Fixed streaming logger (future)                | Network, with SD as backup           | Continuous over Ethernet                                                                                                             | Mains            |
+| Fixed streaming logger (future)                | Network only, or network + SD backup | Continuous over Ethernet                                                                                                             | Mains            |
 | Remote monitor (future)                        | SD + low-rate summaries over network | Periodic                                                                                                                             | Battery or mains |
 
 All three are the same firmware core with a different config and sensor set.
@@ -70,17 +70,20 @@ One repo, one PlatformIO project, one build environment per logger type:
 firmware/
   platformio.ini          # one [env:<logger>] per logger type          (exists)
   lib/
-    logger_core/          # shared: config, time, SD writer, net, MQTT, status, power   (phase 2)
-    sensors/              # sensor drivers wrapped in the common Sensor interface        (phase 2-3)
+    logger_core/          # feature host, DLOG writer, sinks, config, time, LED, net    (phase 2)
+    sensors/              # sensor features: sim accel, ADXL355, BME280, …              (phase 2-3)
   loggers/
     bench_adxl345/        # breadboard ADXL345 streaming for the accel viewer (temporary; exists)
-    vibration/main.cpp    # picks sensors + settings; ~100 lines, no plumbing           (phase 2)
+    vibration/main.cpp    # picks features + settings; ~100 lines, no plumbing          (phase 2)
 protocol/
   FILE_FORMAT.md          # DLOG data format spec, v1.0                  (exists)
   MQTT.md                 # topics + JSON payload schemas, v1            (exists)
+  features/               # feature definitions (core, recording, accel, …)   (exists)
 master/
-  logger_reader/          # Python package: read files -> pandas        (phase 2)
-  fleet/                  # MQTT service + CLI (status, start/stop, configure)  (phase 5)
+  logger_reader/          # Python package: read DLOG -> pandas, capture tool  (phase 2)
+  fleet/                  # MQTT service, dashboard, CLI                 (phase 5)
+registry/
+  devices.yaml            # device registry: serials, assignments, expected features (phase 3)
 tools/
   accel-viewer/           # browser bench viewer for the ADXL345 (temporary; exists)
 docs/
@@ -92,28 +95,100 @@ Firmware builds per logger: `cd firmware && pio run -e <logger> -t upload`.
 The repo is currently called `Vibration-Logger`. Rename it (e.g. `logger-ecosystem`) once the
 second logger type exists.
 
-## The common data model
+## Feature model: different devices, common interfaces
 
-Every logger describes itself the same way. This description is the "common dataframe": it
-goes in every file header and in every MQTT `info` message.
+Loggers will differ (sensors, storage, power), but anything they share must be controlled the
+same way. So every logger is built from **features**: self-contained capabilities, each with a
+fixed interface of config fields, status fields, commands, streams and events. Definitions:
+[protocol/features/](../protocol/features/).
 
-- **Device**: `device_id` (from MAC, permanent), `name` (human label from config), `logger_type`,
-  `firmware_version`
-- **Stream**: a group of channels sampled together on one clock, e.g. `accel` (x, y, z at
-  1000 Hz) or `env` (temperature, humidity at 1 Hz)
-- **Channel**: `name`, `unit`, `dtype` (int16/int32/float32), `scale` + `offset` (raw → engineering
-  units), `sample_rate`
+- **A logger is just a set of features.** The portable vibration logger is `core + recording +
+  sd + battery + wifi + accel + publish` (+ `env` if a BME280 is fitted). A future fixed logger
+  might be `core + recording + ethernet + netstream + accel×2 + tacho`. The accelerometer
+  self-test command is identical on both, because it's the same feature.
+- **Instances** let a feature appear more than once (`accel_de`, `accel_nde`). Config and status
+  are grouped by instance; commands can name a `target` instance (optional when unambiguous).
+- **The feature is the interface, not the hardware.** ADXL355, ADXL345 and the simulator all
+  implement `accel`; `info` reports the implementation (`impl`) and narrows allowed values
+  (`limits`).
+- **Self-describing.** Each logger lists its features in MQTT `info`. The master and dashboards
+  read the feature definitions to know what to expect and which controls to show, so a new
+  feature needs no per-device-type UI code.
+- **Versioned.** Breaking changes to a feature bump its version; adding things doesn't.
 
-Sensor modules only declare their streams and channels and push samples. The core handles the rest.
+Every logger describes its data the same way too (the "common dataframe"), in every DLOG file
+header and every `info` message:
+
+- **Device**: `device_id` (MAC, permanent), `serial` (case label), `name`, type, firmware
+- **Stream**: channels sampled together on one clock, e.g. `accel` (x, y, z at 4000 Hz) or `env`
+  (temperature, humidity at 1 Hz), linked to the feature instance that produced it
+- **Channel**: `name`, `unit`, `scale` + `offset` (raw → engineering units); dtype and rate per stream
+
+In firmware, the core library is a **feature host**:
 
 ```cpp
-class Sensor {
+class Feature {
 public:
-    virtual bool begin(const Config&) = 0;
-    virtual StreamInfo describe() const = 0;   // channels, units, rate, scaling
-    virtual size_t read(SampleBlock& out) = 0; // called by core's acquisition task
+    virtual const char* feature() const = 0;            // "accel"
+    virtual const char* instance() const = 0;           // "accel" or "accel_de"
+    virtual int version() const = 0;
+    virtual bool begin(JsonObjectConst config) = 0;     // config section for this instance
+    virtual void describe(JsonObject info) const = 0;   // impl, limits, extra info
+    virtual void status(JsonObject out) const = 0;
+    virtual CommandResult command(const char* cmd, JsonObjectConst args, JsonObject result);
+    virtual size_t streams(StreamInfo* out, size_t max) const { return 0; }  // sensors only
+    virtual void poll() {}                              // called from the feature's task
 };
 ```
+
+The core routes config sections, commands and status requests to features by instance name,
+and sensor features feed sample blocks to the acquisition pipeline. Adding a sensor means
+adding a feature class; nothing else changes.
+
+## Device identity and registry
+
+- **`device_id`**: the ESP32 MAC. Permanent and unique, automatic.
+- **Serial number** (e.g. `VL-0001`): assigned once when a unit is built, stored in the board's
+  NVS (survives firmware updates and SD card swaps), printed on a label on the case. Set over
+  USB with a one-off serial command. Included in every DLOG file (`device.serial`) and in `info`.
+- **The device is the authority on what it can do** (its `info` lists its features). The
+  **registry** records what the device can't know about itself:
+
+| Field | Example | Source |
+|---|---|---|
+| `device_id`, serial | `9070692f3338`, `VL-0001` | Device (auto-added on first contact) |
+| Type, hardware revision | `vibration`, rev A | At build |
+| Expected features/options | `env` fitted, external antenna | At build |
+| Sensor details | ADXL355 board serial, calibration offsets | Manual / calibration |
+| Assignment | "Pump house 2, motor DE", since date | Manual, changes over time |
+| Last seen | firmware, IP, battery, last contact | Automatic from `status` / `info` |
+| Notes | "Replaced SD card 2026-11" | Manual |
+
+- The master **compares expected vs advertised** and flags differences (e.g. "VL-0003 should
+  have `env` but doesn't").
+- **Storage:** start as a file in the repo (`registry/devices.yaml`): easy to edit by hand,
+  version history, fine for a handful of units. The master loads it; it can move into a
+  database later if the fleet grows.
+
+## Network and connecting loggers
+
+- **The master's own network:** a dedicated 2.4 GHz router/access point (not the PC's hotspot),
+  not connected to corporate WiFi. Avoids enterprise logins, guest-network client isolation and
+  blocked mDNS, and keeps unmanaged devices off IT's network. Ethernet loggers plug into the
+  same router.
+- **Ethernet loggers need no setup:** plug in, get an address by DHCP, carry on below.
+- **One set of WiFi credentials for the whole fleet**, so connecting a new WiFi logger means
+  giving it the same network details (`wifi.networks`, a list tried in order: master network
+  first, then e.g. a bench network) as the others. Stored in internal flash, set by any of:
+  1. over USB when the unit is built (with the serial number): works for every logger, or
+  2. the logger's own hotspot + web page when it can't find a known network (field changes), or
+  3. `config.json` on an SD card, for loggers that have one.
+- **Everything after that is automatic:** DHCP address → find the broker by mDNS → connect →
+  publish `info` → appears on the dashboard and is auto-added to the registry.
+- **Limits to know:** ESP32 is 2.4 GHz only; metal/concrete around machinery cuts range (use the
+  external antenna, place the AP sensibly); WiFi passwords are stored unencrypted in internal
+  flash, and in `config.json` if an SD card is used to set them (acceptable on an isolated
+  network; flash encryption can be added later if needed).
 
 ## Data format (DLOG)
 
@@ -144,10 +219,21 @@ public:
 };
 ```
 
-- `SdSink`: append to rolling files on SD (phase 2).
-- `NetSink`: TCP stream of blocks to the master; if the link drops, either buffer, fall back
-  to SD, or drop (configurable). Built later; the interface exists from day one.
-- Possible later: `SummarySink` (compute RMS/peaks per window and publish over MQTT).
+**Not every logger has an SD card.** Ethernet/streaming loggers may have only a network sink,
+so nothing in the core may assume a card: config, identity and boot counters live in the
+board's internal flash, and a logger's sinks are just the ones its firmware includes.
+
+- `UsbSink`: DLOG over the USB serial port, for bench capture (phase 2, exists).
+- `SdSink`: append to rolling files on SD (phase 3), on loggers that have a card.
+- `NetSink`: TCP stream of blocks to the master. If the link drops: fall back to SD if the
+  logger has one; otherwise buffer in PSRAM (8 MB ≈ 3-4 min at 36 kB/s) and send on reconnect,
+  then drop the oldest data with GAP flagged if the outage lasts longer. Built later; the
+  interface exists from day one.
+- `PublishSink`: feeds the configured data publications (see MQTT below). Each publication is a
+  small `Reducer` (latest, mean, stats, snapshot, …) that consumes blocks and emits one message
+  per interval. New methods are new `Reducer` classes registered by name; nothing else changes.
+  Runs alongside the recording sinks from the same blocks, so publishing never touches what's
+  recorded.
 
 Raw waveforms go over a dedicated TCP stream rather than MQTT. MQTT stays for small control and
 status messages, so a busy data stream can't delay commands.
@@ -155,10 +241,18 @@ status messages, so a busy data stream can't delay commands.
 ## MQTT protocol
 
 Full spec: [protocol/MQTT.md](../protocol/MQTT.md). Small JSON messages only; raw waveforms go
-through a network sink, never MQTT. Each logger publishes retained `info`, `status` (last-will
-`offline`) and `config`, plus `events` and optional `live` summaries. The master sends commands
-(`start`, `stop`, `mark`, `identify`, `set_config`, `sync_time`, `roll_file`, `reboot`) to one
-logger or to `loggers/all/cmd`, and every command gets an ack. Loggers find the broker from
+through a network sink, never MQTT. Each logger publishes retained `info` (identity, features,
+streams), `status` (per feature instance; last-will `offline`) and `config` (per feature
+instance), plus `events`. Commands are defined by features (`start`, `stop`, `mark`, `identify`,
+`set_config`, `self_test`, …) with an optional `target` instance, and can be sent to one logger,
+a group (`loggers/group/<group>/cmd`) or everyone; every logger acks individually. Fleet
+operations ("self-test every accelerometer in the pump house") are resolved by the master.
+
+**Data publications:** any number of configurable live feeds on `loggers/<id>/data/<name>`.
+Each picks a stream, a method (`latest`, `mean`, `stats`, `snapshot`; more can be added by
+name), an interval and a window. Messages are self-describing, so new methods need no protocol
+change. Best-effort and budget-limited; the recording sinks (SD and/or network stream) remain
+the record. Loggers find the broker from
 config, with mDNS as a fallback, so no IP addresses are hard-coded.
 
 ## Timekeeping
@@ -177,14 +271,66 @@ Accuracy target: roughly a second is fine. The master is the time source.
 
 ## Device behaviour (core library)
 
-- **Config**: `config.json` on the SD card (WiFi credentials, broker, sample rates, name).
-  Can be overridden via MQTT `set_config`. Secrets never go in the repo.
-- **Acquisition**: sensor reads on core 1 (timer/FIFO driven), buffered in PSRAM; SD writes in
-  large blocks from a separate task; networking on core 0. Network hiccups can't cause dropped
-  samples.
+- **Config** lives in the board's **internal flash** (LittleFS), so every logger has it,
+  with or without an SD card. Layers, lowest first:
+  1. firmware defaults for the logger type (its feature list and settings);
+  2. the stored config in internal flash, changed by `set_config`, the web pages or USB;
+  3. on loggers with a card, `config.json` on the SD card, applied at boot and saved to internal
+     flash. `set_config` also writes it back to the card, so the two never disagree.
+  Secrets never go in the repo.
+- **Identity** (serial number, boot counter) lives in NVS, never on removable storage.
+- **Acquisition**: sensor reads on core 1 (timer/FIFO driven), buffered in PSRAM; sink writes
+  (SD, network) in large blocks from a separate task; networking on core 0. Network or card
+  hiccups can't cause dropped samples.
 - **Power profiles**: `always_on` (mains), or `duty_cycle` (battery): record window → deep
   sleep → wake, briefly connect, report status, pick up commands.
-- **Status LED**: the same colour codes on every logger (recording, error, SD full, no time sync).
+- **Status LED**: the same colour codes on every logger (see below).
+
+### Recording control (no button)
+
+Loggers have a **power switch and a status LED, but no button**. Recording is controlled by
+power-on behaviour, config and the network:
+
+- **Auto-start:** after power-on, the logger counts down and then starts recording. Config
+  `record.autostart` (default `true`) and `record.start_delay_s` (default `10`). The delay lets
+  you mount it and step away; a `recording` start marker goes in the file regardless.
+- **Every power-on re-applies the config.** Stopping over WiFi only lasts until the next power
+  cycle, unless `autostart` has been turned off. A crash or brownout therefore resumes
+  recording by itself, in a new file (new `boot.id`).
+- **Remote control:** `start`, `stop` and `set_config` over WiFi, through either web interface
+  (below), or over USB. On loggers with an SD card, config can also be edited in `config.json`
+  on the card, no WiFi needed.
+- **Switching off while recording** loses at most the last flush interval (default 5 s).
+  Earlier data and files are safe. Stop over WiFi first for a perfectly clean END.
+- **Faults clear themselves:** if a sink is unavailable (SD card missing, network down) or a
+  sensor is missing, the logger shows the error colour and keeps retrying, so inserting a card
+  or restoring the link starts recording without a button.
+
+### Web interfaces
+
+Both send the same commands, so there's one control model:
+
+1. **Master dashboard** (phase 5): a web page on the master PC, talking to every logger over MQTT.
+2. **Logger-hosted page** (phase 5): the logger runs its own WiFi hotspot when it can't find the
+   master, serving a small page for start/stop, status and settings. For the portable logger
+   in the field, from a phone, with no master present.
+
+### Status LED
+
+An external **RGB LED mounted in the case wall** (common-cathode, 3 PWM pins with resistors:
+zero idle current and reliable at 3.3 V; a single-pin WS2812-type LED is the fallback if pins
+run short, at ~1 mA idle). The onboard RGB LED mirrors it for bench use. Short blinks, not
+steady light, to save battery.
+
+| Colour / pattern | Meaning |
+|---|---|
+| Blue blinking, faster near the end | Countdown before recording |
+| Green short blink every few seconds | Recording |
+| Cyan short blink | Recording and connected to the master |
+| Slow white pulse | Idle: stopped, or auto-start off |
+| Yellow blink | Recording with a warning: battery low, clock not synced, clipping |
+| Red fast blink | Can't record: no SD card or sensor fault (retrying) |
+| Rapid white flashing | `identify` command |
 
 ## Hardware: portable vibration logger
 
@@ -203,10 +349,33 @@ Accuracy target: roughly a second is fine. The master is the time source.
 **Data rate is small:** ADXL355 at 4 kHz × 3 axes × 20-bit ≈ 36 kB/s. Either SD mode
 handles that easily. SDIO is chosen for headroom and lower CPU load.
 
-**Pin budget** (exact GPIOs to be confirmed against the TinyS3[D] pinout during phase 3):
-ADXL355 on its own SPI bus (SCK, MOSI, MISO, CS, DRDY = 5 pins), SD on SDMMC 4-bit (CLK, CMD,
-D0-D3 = 6 pins), BME280 on the existing I2C bus (0 extra pins). That's 11 of ~14 free GPIOs.
+**Pin map** (in `firmware/loggers/vibration/main.cpp`). 14 of the 14 usable GPIOs (17 exposed,
+minus I2C on 8/9 and the IO0 boot pin): it fits, with no spare. If more pins are needed, run SD
+in 1-bit SDIO mode (`sd.bus_width: 1`, frees D1-D3; still far faster than the 36 kB/s needed) or
+use a single-pin WS2812-type LED (frees 2).
+
+| TinyS3[D] pin | Connects to | Notes |
+|---|---|---|
+| IO34 | ADXL355 CS (PMOD pin 1) | own SPI bus (HSPI) |
+| IO35 | ADXL355 MOSI (pin 2) | |
+| IO37 | ADXL355 MISO (pin 3) | |
+| IO36 | ADXL355 SCLK (pin 4) | |
+| IO7 | ADXL355 DRDY (pin 10) | wired for future use; the FIFO is polled |
+| IO1 | SD CLK | SDMMC host, 4-bit |
+| IO2 | SD CMD (SI) | |
+| IO3 | SD D0 (SO) | |
+| IO4 | SD D1 | |
+| IO5 | SD D2 | |
+| IO6 | SD D3 (CS) | |
+| IO8 / IO9 | I2C SDA / SCL | onboard fuel gauge; BME280 when fitted |
+| IO21 / IO43 / IO44 | case RGB LED R / G / B | phase 4 (onboard LED used until then) |
+| IO0 | free | BOOT strap pin: anything holding it low at reset enters download mode |
+| 3V3 / GND | ADXL355 VDD (pins 6, 12) and DGND (5, 11); SD 3V and GND | 3.3 V only for both |
 The sensor and SD card are on **separate buses**, so slow SD writes can never delay sensor reads.
+
+**Power switch:** between the LiPo and the TinyS3[D]'s BAT input. Off means zero drain (safe
+for shelf storage); the battery only charges with the switch on, which also runs the logger
+(harmless: it just records while charging).
 
 **Application: machinery vibration.** Defaults: ADXL355 at ±8 g, 4000 Hz output rate (~1 kHz
 bandwidth), both configurable.
@@ -251,10 +420,11 @@ connected → roughly 1.5-3 days on 3000 mAh. Periodic WiFi instead of always-on
 | - | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | 0 | Toolchain, TinyS3[D] flashing, WiFi scan, ADXL345 breadboard + accel viewer (done)                        | Hardware works                                 |
 | 1 | Restructure repo; write `FILE_FORMAT.md` + `MQTT.md` v1 (done)                                            | Agreed contracts before code                   |
-| 2 | Core: config, `Sink` interface + `SdSink`, timekeeping, **fake sine-wave sensor**; Python reader | Full data path end-to-end without real sensors |
-| 3 | Vibration sensor module on real hardware; check sample-rate stability and SD throughput                   | The portable logger is usable                  |
+| 1b | Feature model: feature definitions, MQTT/DLOG updates for features, serials, groups (done)               | Common interfaces across different devices     |
+| 2 | Core: feature host, DLOG writer, sinks (USB now, SD when wired), config, timekeeping, auto-start + status LED, **simulated accel**; Python reader + capture tool + tests; acquisition/writer tasks with a PSRAM buffer (**built**: compiles, Python tests pass; on-board test outstanding) | Full data path end-to-end without real sensors |
+| 3 | ADXL355 feature + SD sink on the Adafruit 4682 (**written, compiles; wiring and on-board test next**); sample-rate stability and SD throughput; config store in internal flash (+ optional SD `config.json`), `set_config`; serial number provisioning; registry file | The portable logger is usable |
 | 4 | Battery: power manager, fuel gauge (MAX17048 onboard), sleep/duty-cycle                                   | Portable logger is field-ready                 |
-| 5 | Master AP setup; WiFi + MQTT status/commands; NTP; fleet service + CLI                                    | Remote control and monitoring                  |
+| 5 | Master AP setup; WiFi + MQTT status/commands + publications; NTP; fleet service, master dashboard, logger-hosted web page | Remote control and monitoring |
 | 6 | `NetSink` + master stream receiver; Ethernet board support; OTA updates                                 | Streaming loggers                              |
 | 7 | Second logger type                                                                                        | The abstraction actually works                 |
 
@@ -267,7 +437,11 @@ blocks them, because the sink interface and file format are designed for streami
 2. ~~SD card interface~~: decided: Adafruit 4682 on SDMMC 4-bit.
 3. Battery life target for the portable logger? Keeping WiFi connected most of the time costs
    power (roughly 20-100 mA), so this decides whether WiFi stays on or connects periodically.
-4. Master AP: built-in PC WiFi hotspot, or a dedicated router/access point the PC and Ethernet
-   loggers plug into? (A dedicated router is more reliable and handles DHCP for both.)
+4. ~~Master AP~~: decided: a dedicated 2.4 GHz router/access point (see Network).
 5. Is OTA firmware update over the network wanted, or is USB flashing fine?
-6. Should loggers start recording on power-up, or wait for a command/button?
+6. ~~Start on power-up or wait for a command~~: decided: auto-start after a configurable delay
+   (default 10 s), no button; start/stop/config over WiFi (see Recording control).
+7. Which SD board is in hand for phase 2: the Adafruit 4682 (SDIO), or the generic adapter (SPI)
+   for now? (Phase 2 proceeds with a USB sink until then.)
+8. ~~Registry location~~: decided: start as `registry/devices.yaml` in the repo.
+9. Serial number scheme: `VL-0001` style (type prefix + number)?

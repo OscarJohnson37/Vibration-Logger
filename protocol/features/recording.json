@@ -1,0 +1,34 @@
+{
+  "feature": "recording",
+  "version": 1,
+  "multi_instance": false,
+  "description": "When to record, and how data is split into files. Loggers have no button: recording starts automatically after power-on unless configured otherwise, and can be started or stopped remotely.",
+  "config": {
+    "autostart": { "type": "boolean", "default": true, "description": "Start recording automatically after power-on." },
+    "start_delay_s": { "type": "integer", "default": 10, "min": 0, "max": 3600, "unit": "s", "description": "Countdown before auto-start." },
+    "flush_interval_s": { "type": "integer", "default": 5, "min": 1, "max": 60, "unit": "s", "description": "Maximum data lost on a power cut." },
+    "file_max_minutes": { "type": "integer", "default": 60, "min": 1, "max": 1440, "unit": "min" },
+    "file_max_mb": { "type": "integer", "default": 256, "min": 1, "max": 3900, "unit": "MB" },
+    "sinks": { "type": "array", "items": { "type": "string", "enum": ["sd", "netstream", "usb"] }, "default": null,
+      "applies": "new_file", "description": "Where recorded data goes. Default (null): every sink this logger has; a logger without an SD card simply has no sd sink. usb streams DLOG over the USB serial port (bench use)." }
+  },
+  "status": {
+    "recording": { "type": "boolean" },
+    "countdown_s": { "type": "integer", "unit": "s", "description": "Seconds until auto-start, while counting down." },
+    "file": { "type": "string", "description": "Current file name." },
+    "started_ms": { "type": "integer", "description": "UTC ms when recording started, or null if unsynced." },
+    "files_this_boot": { "type": "integer" },
+    "bytes_written": { "type": "integer", "unit": "bytes" }
+  },
+  "commands": {
+    "start": { "description": "Start recording now (opens a new file). Cancels any countdown.", "args": {} },
+    "stop": { "description": "Stop recording (writes END and closes the file). Lasts until the next power-on.", "args": {} },
+    "roll_file": { "description": "Close the current file and open the next.", "args": {} }
+  },
+  "streams": [],
+  "events": {
+    "recording_started": "Recording started.",
+    "recording_stopped": "Recording stopped.",
+    "file_rolled": "A new data file was opened."
+  }
+}

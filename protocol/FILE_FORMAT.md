@@ -160,6 +160,7 @@ for the whole file. One file never spans a reboot.
   "format_version": "1.0",
   "device": {
     "id": "9070692f3338",
+    "serial": "VL-0001",
     "name": "vib-01",
     "type": "vibration",
     "hardware": "TinyS3[D]",
@@ -178,6 +179,7 @@ for the whole file. One file never spans a reboot.
     {
       "id": 1,
       "name": "accel",
+      "feature": "accel",
       "sensor": { "model": "ADXL355", "range_g": 8, "odr_hz": 4000, "lpf_hz": 1000, "hpf": "off" },
       "rate_hz": 4000,
       "dtype": "i24",
@@ -197,6 +199,7 @@ for the whole file. One file never spans a reboot.
     {
       "id": 2,
       "name": "env",
+      "feature": "env",
       "sensor": { "model": "BME280" },
       "rate_hz": 1,
       "dtype": "f32",
@@ -214,6 +217,7 @@ for the whole file. One file never spans a reboot.
 |---|:-:|---|
 | `format`, `format_version` | ✓ | Always `"dlog"`; the version repeats the preamble's |
 | `device.id` | ✓ | Permanent unique ID: the ESP32 MAC, 12 lowercase hex digits |
+| `device.serial` | | Human-readable serial on the case label (e.g. `VL-0001`), assigned when the unit is built |
 | `device.name` | | Human label from config; may change between files |
 | `device.type` | ✓ | Logger type, e.g. `"vibration"` |
 | `device.hardware`, `device.firmware` | ✓ | |
@@ -223,6 +227,7 @@ for the whole file. One file never spans a reboot.
 | `time` | ✓ | Clock state when the file opened. If `synced` is false, only `mono_us` is present |
 | `streams[].id` | ✓ | Unique within the file; referenced by DATA records |
 | `streams[].name` | ✓ | Short machine name: `accel`, `env`, `tacho`, … |
+| `streams[].feature` | | The feature instance that produced it (see [features/](features/)) |
 | `streams[].rate_hz` | ✓ | Nominal frame rate |
 | `streams[].dtype` | ✓ | See sample types |
 | `streams[].raw_min`, `raw_max` | | Sensor full scale in raw counts; used for clipping detection |
@@ -251,7 +256,10 @@ Readers convert as follows:
 
 Accuracy target: about 1 s. The ESP32 clock drifts roughly 1–2 s per day between syncs.
 
-## Files on the SD card
+## Files on an SD card or the master
+
+The same layout is used by loggers writing to an SD card and by the master's stream receiver
+(for loggers that have no card and stream instead):
 
 ```
 /logs/<device.id>/b<boot.id, 6 digits>_f<file.index, 4 digits>.dlog

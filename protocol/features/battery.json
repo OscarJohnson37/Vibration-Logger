@@ -1,0 +1,20 @@
+{
+  "feature": "battery",
+  "version": 1,
+  "multi_instance": false,
+  "description": "Battery level and charging state from a fuel gauge.",
+  "config": {
+    "low_warning_pct": { "type": "integer", "default": 15, "min": 0, "max": 100, "unit": "%" }
+  },
+  "status": {
+    "voltage": { "type": "number", "unit": "V" },
+    "percent": { "type": "number", "unit": "%" },
+    "charging": { "type": "boolean" },
+    "usb_power": { "type": "boolean" }
+  },
+  "commands": {},
+  "streams": [],
+  "events": {
+    "battery_low": "Battery below low_warning_pct."
+  }
+}

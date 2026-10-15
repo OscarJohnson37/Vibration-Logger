@@ -10,3 +10,5 @@ __pycache__/
 # Recorded data and local secrets
 *.dlog
 secrets.*
+.pytest_cache/
+*.egg-info/

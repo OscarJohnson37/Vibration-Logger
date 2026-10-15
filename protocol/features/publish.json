@@ -1,0 +1,19 @@
+{
+  "feature": "publish",
+  "version": 1,
+  "multi_instance": false,
+  "description": "Configurable data publications over MQTT: latest values, averages, statistics, snapshots. See MQTT.md for the publication definition and message format.",
+  "config": {
+    "budget_kbps": { "type": "number", "default": 32, "min": 1, "unit": "kB/s", "description": "Cap on total publication traffic." },
+    "publications": { "type": "array", "default": [], "description": "Publication definitions (MQTT.md, Defining a publication)." }
+  },
+  "status": {
+    "publications": { "type": "array", "description": "Per publication: name, sent, skipped." }
+  },
+  "commands": {
+    "publish": { "description": "Publish once, now. Args are a publication definition without interval_s.",
+      "args": { "name": { "type": "string" }, "stream": { "type": "string" }, "method": { "type": "string" }, "params": { "type": "object" } } }
+  },
+  "streams": [],
+  "events": {}
+}

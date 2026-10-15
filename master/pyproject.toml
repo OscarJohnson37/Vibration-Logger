@@ -1,0 +1,17 @@
+[project]
+name = "logger-master"
+version = "0.1.0"
+description = "Master-side tools for the logger ecosystem: DLOG reader (and later the fleet service)"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pandas>=2.0"]
+
+[project.optional-dependencies]
+capture = ["pyserial>=3.5"]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["logger_reader"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
