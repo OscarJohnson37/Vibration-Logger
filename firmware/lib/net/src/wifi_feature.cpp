@@ -69,6 +69,8 @@ carries on, and the battery lasts much longer. To get WiFi back, switch the logg
 <label for="ssid">Network name (SSID)</label><input id="ssid" name="ssid" required maxlength="32" autocomplete="off">
 <label for="password">Password</label><input id="password" name="password" type="password" maxlength="63" placeholder="blank keeps a known network's password" autocomplete="off">
 <label for="mqtt">Master address (optional)</label><input id="mqtt" name="mqtt_host" placeholder="found automatically" maxlength="63" autocomplete="off">
+<label for="mqttUser">Master username (if the master has a password)</label><input id="mqttUser" maxlength="32" placeholder="e.g. logger" autocomplete="off">
+<label for="mqttPass">Master password</label><input id="mqttPass" type="password" maxlength="63" placeholder="blank keeps the stored one" autocomplete="off">
 <button class="primary" type="submit">Save &amp; reboot</button><button type="button" id="forget">Forget all networks</button>
 </form>
 <p class="hint" id="netMsg">The logger tries known networks in order, newest last. It reboots to join; if it can't find any, this hotspot comes back.</p>
@@ -114,7 +116,8 @@ async function tick(){
 }
 async function nets(){
   try{const n=await (await fetch("/networks",{cache:"no-store"})).json();
-    $("nets").textContent="Known networks: "+(n.networks.length?n.networks.join(", "):"none")+(n.mqtt_host?" · master "+n.mqtt_host:"");}catch(e){}
+    $("nets").textContent="Known networks: "+(n.networks.length?n.networks.join(", "):"none")+(n.mqtt_host?" · master "+n.mqtt_host:"")+(n.mqtt_user?" · master login "+n.mqtt_user:"");
+    if(n.mqtt_user&&!$("mqttUser").value)$("mqttUser").placeholder=n.mqtt_user;}catch(e){}
 }
 async function post(body){
   $("netMsg").textContent="Saving…";
@@ -141,7 +144,8 @@ $("radioOff").onclick=async()=>{
   catch(e){$("radioMsg").textContent="WiFi is off."}
 };
 $("recStart").onclick=()=>rec("start");$("recStop").onclick=()=>rec("stop");
-$("netForm").onsubmit=e=>{e.preventDefault();post({ssid:$("ssid").value,password:$("password").value,mqtt_host:$("mqtt").value})};
+$("netForm").onsubmit=e=>{e.preventDefault();const b={ssid:$("ssid").value,password:$("password").value,mqtt_host:$("mqtt").value};
+  if($("mqttUser").value)b.mqtt_user=$("mqttUser").value;if($("mqttPass").value)b.mqtt_password=$("mqttPass").value;post(b)};
 $("forget").onclick=()=>{if(confirm("Forget all networks? The logger will only run its own hotspot."))post({clear:"1"})};
 tick();nets();setInterval(tick,2000);
 </script></body></html>)html";
@@ -240,6 +244,7 @@ void WifiFeature::sendNetworks() {
     JsonArray a = d["networks"].to<JsonArray>();
     for (JsonVariantConst n : host_->config()["wifi"]["networks"].as<JsonArrayConst>()) a.add(n["ssid"] | "");
     d["mqtt_host"] = host_->config()["core"]["mqtt_host"] | "";
+    d["mqtt_user"] = host_->config()["core"]["mqtt_user"] | "";  // never the password
     String out;
     serializeJson(d, out);
     server_.sendHeader("Cache-Control", "no-store");
@@ -266,6 +271,8 @@ void WifiFeature::saveNetwork() {
         n["ssid"] = ssid;
         n["password"] = password;
         if (server_.hasArg("mqtt_host")) changes["core"]["mqtt_host"] = server_.arg("mqtt_host");
+        if (server_.hasArg("mqtt_user")) changes["core"]["mqtt_user"] = server_.arg("mqtt_user");
+        if (server_.hasArg("mqtt_password")) changes["core"]["mqtt_password"] = server_.arg("mqtt_password");
     }
     JsonDocument result;
     String message;

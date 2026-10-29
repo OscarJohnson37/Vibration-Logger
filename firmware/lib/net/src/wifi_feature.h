@@ -11,7 +11,8 @@
 // network.
 //
 // The page also sets the networks to join (and the master's address), then reboots to join:
-//   /networks  GET: known network names; POST ssid, password[, mqtt_host] or clear=1
+//   /networks  GET: known network names; POST ssid, password[, mqtt_host, mqtt_user,
+//              mqtt_password] or clear=1
 // and, while the master isn't connected, names a session and starts/pauses recording:
 //   /recording POST action=start|stop[, session]  (refused while the master is in control)
 //   /update    POST multipart firmware .bin (with an OtaFeature set; refused while the master

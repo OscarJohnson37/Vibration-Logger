@@ -1,9 +1,11 @@
 """Draws the logger's app icon and writes it into the firmware as PNG byte arrays.
 
-The logger's own web page serves these so a phone can add it to the home screen with a proper
-icon (iPhone: apple-touch-icon 180 px; Android: web manifest 192 and 512 px).
+The logger's own web page and the master dashboard serve these so a phone can add them to the
+home screen with a proper icon (iPhone: apple-touch-icon 180 px; Android: web manifest 192 and
+512 px).
 
-    python tools/make_icons.py      # writes firmware/lib/net/src/icons.h (and icon-preview.png)
+    python tools/make_icons.py      # writes firmware/lib/net/src/icons.h, the master dashboard's
+                                    # static/icon-*.png, and icon-preview.png
 
 Needs Pillow. Edit the drawing below to restyle it, then rebuild the firmware.
 """
@@ -18,6 +20,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "firmware" / "lib" / "net" / "src" / "icons.h"
+MASTER_STATIC = ROOT / "master" / "logger_master" / "static"
 SIZES = (180, 192, 512)
 
 BG_TOP = (31, 72, 140)       # deep blue
@@ -76,6 +79,7 @@ def main() -> None:
     ]
     for size in SIZES:
         data = png_bytes(draw(size))
+        (MASTER_STATIC / f"icon-{size}.png").write_bytes(data)
         lines.append(f"static const uint8_t ICON_{size}[] PROGMEM = {{")
         for i in range(0, len(data), 20):
             lines.append("    " + ", ".join(f"0x{b:02x}" for b in data[i:i + 20]) + ",")

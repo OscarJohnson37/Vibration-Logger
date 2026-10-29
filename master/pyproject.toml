@@ -7,7 +7,8 @@ dependencies = ["numpy>=1.24", "pandas>=2.0"]
 
 [project.optional-dependencies]
 capture = ["pyserial>=3.5"]
-server = ["paho-mqtt>=2.0", "fastapi>=0.110", "uvicorn>=0.27", "pyyaml>=6"]
+# websockets: the dashboard's live updates (/ws); plain uvicorn serves the page but not the socket
+server = ["paho-mqtt>=2.0", "fastapi>=0.110", "uvicorn>=0.27", "websockets>=12", "pyyaml>=6"]
 dev-broker = ["amqtt>=0.11"]
 test = ["pytest>=7", "paho-mqtt>=2.0", "fastapi>=0.110", "pyyaml>=6"]
 

@@ -63,7 +63,7 @@ def test_bad_front_matter_reported(tmp_path):
 def test_shipped_catalogue_page_is_valid():
     m = Models(CATALOGUE).get("VL-P1")
     assert m and "error" not in m
-    assert set(m["expected_features"]) == {"core", "recording", "sd", "battery", "accel", "wifi", "publish"}
+    assert set(m["expected_features"]) == {"core", "recording", "sd", "battery", "accel", "wifi", "publish", "ota"}
     assert "LED guide" in m["markdown"] and "Pin map" in m["markdown"]
 
 

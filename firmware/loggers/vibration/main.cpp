@@ -16,7 +16,7 @@
 #include <wifi_feature.h>
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.4.2"
+#define FIRMWARE_VERSION "0.4.3"
 #endif
 
 // Identifies this image for over-the-air updates: a logger only installs firmware for its own model

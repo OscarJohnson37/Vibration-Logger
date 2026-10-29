@@ -4,7 +4,7 @@ name: Portable vibration logger
 type: vibration
 hardware_revs: [A]
 description: Battery-powered 3-axis vibration logger for machinery. Records to a microSD card; talks to the master over WiFi when it's in range.
-expected_features: [core, recording, sd, battery, accel, wifi, publish]
+expected_features: [core, recording, sd, battery, accel, wifi, publish, ota]
 specs:
   controller: Unexpected Maker TinyS3[D] (ESP32-S3, 8 MB PSRAM)
   accelerometer: ADXL355, 3 axes, 20-bit, ±2 / ±4 / ±8 g, 125 to 4000 samples/s (default ±8 g, 4000 Hz)
