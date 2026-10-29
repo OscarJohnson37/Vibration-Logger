@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logger Master</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Logger master</h1>
+  <span class="small"><span class="dot" id="brokerDot"></span><span id="brokerText">connecting…</span></span>
+  <span class="small muted" id="clock"></span>
+  <span class="small warn-text" id="clockWarn"></span>
+</header>
+
+<main>
+  <section id="fleet">
+    <div class="panel">
+      <h2>Fleet actions</h2>
+      <div class="bar">
+        <select id="selMode">
+          <option value="selected">Selected loggers</option>
+          <option value="group">Group…</option>
+          <option value="all">All loggers</option>
+        </select>
+        <select id="selGroup" hidden></select>
+        <input id="fleetSession" placeholder="Session name (optional)" maxlength="40" size="22">
+        <button class="primary" data-fleet="start">Start</button>
+        <button data-fleet="stop">Stop</button>
+        <button data-fleet="identify">Identify</button>
+        <button data-fleet="mark">Mark…</button>
+        <button data-fleet="sync_time">Sync time (NTP)</button>
+        <button data-fleet="set_clocks">Set clocks from master</button>
+      </div>
+      <p class="small muted" id="sessionHint" style="margin:6px 0 0"></p>
+      <div id="fleetResult"></div>
+    </div>
+    <div class="bar" style="margin-bottom:10px">
+      <label class="small muted">Show
+        <select id="groupFilter"><option value="">all groups</option></select></label>
+      <span class="small muted" id="fleetCount"></span>
+    </div>
+    <div class="cards" id="cards"></div>
+    <p class="muted" id="empty" hidden>No loggers yet. They appear here as soon as they connect to the broker.</p>
+  </section>
+
+  <section id="detail">
+    <div class="bar">
+      <button id="back">← Fleet</button>
+      <div>
+        <div class="name" id="dName" style="font-weight:600;font-size:16px"></div>
+        <div class="small muted" id="dSub"></div>
+      </div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="live">Live data</button>
+      <button data-tab="orientation" data-needs="accel">Orientation</button>
+      <button data-tab="control">Control</button>
+      <button data-tab="config">Config</button>
+      <button data-tab="registry">Registry</button>
+      <button data-tab="events">Events</button>
+      <button data-tab="about">About</button>
+    </div>
+
+    <div data-pane="overview"><div class="cols" id="overview"></div></div>
+
+    <div data-pane="live" hidden>
+      <div class="panel">
+        <div class="bar">
+          <label class="small muted">Publication <select id="pubSel"></select></label>
+          <label class="small muted">Value <select id="statSel"></select></label>
+          <label class="small muted">Window
+            <select id="winSel"><option value="60">1 min</option><option value="300">5 min</option>
+              <option value="600" selected>10 min</option></select></label>
+          <span class="legend" id="legend"></span>
+        </div>
+        <canvas class="plot" id="plot"></canvas>
+        <p class="small muted" id="liveInfo"></p>
+      </div>
+    </div>
+
+    <div data-pane="orientation" hidden>
+      <div class="cols">
+        <div class="panel"><div id="scene"></div></div>
+        <div class="panel">
+          <h2>Orientation</h2>
+          <dl class="kv">
+            <dt>Gravity (shown axes)</dt><dd id="oG">–</dd>
+            <dt>Tilt from zero</dt><dd id="oTilt">–</dd>
+            <dt>Down axis at zero</dt><dd id="oDown">–</dd>
+            <dt>Updated</dt><dd id="oAge">–</dd>
+          </dl>
+          <div class="bar" style="margin-top:10px">
+            <button id="oZero">Zero (logger in its reference position)</button>
+            <button id="oClear">Clear zero</button>
+          </div>
+
+          <h2 style="margin-top:16px">Model</h2>
+          <div class="bar">
+            <button id="oLoad">Upload model…</button>
+            <input type="file" id="oFile" accept=".stl,.obj,.glb" hidden>
+            <button id="oRemove" disabled>Use default board</button>
+          </div>
+          <div class="bar">
+            <span class="muted small">Turn model</span>
+            <button id="oRotX">X 90°</button><button id="oRotY">Y 90°</button><button id="oRotZ">Z 90°</button>
+          </div>
+          <p class="small muted" id="oModelInfo">Upload an STL, OBJ or GLB to replace the default board.
+            It's stored on the master for this logger, so every browser sees it.</p>
+
+          <h2 style="margin-top:16px">Data axes</h2>
+          <div class="bar">
+            <button id="oAxRotX">Rotate X 90°</button><button id="oAxRotY">Rotate Y 90°</button><button id="oAxRotZ">Rotate Z 90°</button>
+          </div>
+          <div class="bar">
+            <button id="oAxInvX">Invert X</button><button id="oAxInvY">Invert Y</button><button id="oAxInvZ">Invert Z</button>
+            <button id="oAxReset">Reset</button>
+          </div>
+          <p class="small" id="oAxisInfo"></p>
+
+          <p class="small muted">From the mean acceleration in the logger's live publication (the gravity
+            direction), updated once per publication. Rotation about the vertical axis can't be seen by an
+            accelerometer. Arrows are the shown axes <b style="color:var(--c1)">X</b>,
+            <b style="color:var(--c2)">Y</b>, <b style="color:var(--c3)">Z</b>.
+            <b>Turn model</b> lines the model up with the arrows; <b>Data axes</b> choose which sensor axis
+            drives each arrow (nothing moves on screen, only how the model follows the real logger).
+            Zero, model and axes are saved on the master per logger.</p>
+          <p class="small err-text" id="oMsg"></p>
+        </div>
+      </div>
+    </div>
+
+    <div data-pane="control" hidden>
+      <div class="cols">
+        <div class="panel">
+          <h2>Recording</h2>
+          <div class="bar">
+            <input id="cSession" placeholder="Session name" maxlength="40" size="24">
+            <button class="primary" data-cmd="start">Start</button>
+            <button data-cmd="stop">Stop</button>
+            <button data-cmd="roll_file">New file</button>
+          </div>
+          <p class="small muted" id="cSessionHint"></p>
+        </div>
+        <div class="panel">
+          <h2>Logger</h2>
+          <div class="bar">
+            <button data-cmd="identify">Identify (flash LEDs)</button>
+            <button data-cmd="mark">Mark…</button>
+            <button data-cmd="sync_time">Sync time (NTP)</button>
+            <button data-cmd="set_time">Set clock from master</button>
+            <button data-cmd="get_config">Re-send config</button>
+            <button class="danger" data-cmd="reboot">Reboot</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Self-tests</h2>
+          <div class="bar" id="selfTests"></div>
+        </div>
+      </div>
+      <div id="cResult"></div>
+    </div>
+
+    <div data-pane="config" hidden>
+      <div id="configForms"></div>
+      <div class="panel bar">
+        <button class="primary" id="cfgSave">Save changes</button>
+        <button id="cfgReset">Discard</button>
+        <span class="small muted">Only changed fields are sent. Values are checked against the feature
+          definitions and this logger's limits first.</span>
+      </div>
+      <div id="cfgResult"></div>
+    </div>
+
+    <div data-pane="registry" hidden>
+      <div class="panel">
+        <h2>Registry</h2>
+        <div class="form" id="regForm"></div>
+        <div class="bar" style="margin-top:10px"><button class="primary" id="regSave">Save</button></div>
+        <div id="regResult"></div>
+      </div>
+    </div>
+
+    <div data-pane="events" hidden>
+      <div class="panel"><h2>Recent events</h2><div class="events" id="events"></div></div>
+    </div>
+
+    <div data-pane="about" hidden>
+      <div class="panel"><div class="md" id="about"></div></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/STLLoader.js"></script>
+<script src="/static/vendor/OBJLoader.js"></script>
+<script src="/static/vendor/GLTFLoader.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

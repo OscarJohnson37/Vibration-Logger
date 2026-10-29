@@ -2,15 +2,10 @@
   "feature": "wifi",
   "version": 1,
   "multi_instance": false,
-  "description": "WiFi connection. Tries known networks in order; if none is found, can start its own hotspot serving the logger's web page.",
+  "description": "WiFi connection. Tries known networks in order; when the master isn't reachable it can start its own hotspot serving the logger's web page (status, network settings, and recording controls while the master isn't connected).",
   "config": {
-    "networks": { "type": "array", "default": [], "description": "Tried in order, e.g. the master's network first, then a bench network.",
-      "items": { "type": "object", "fields": {
-        "ssid": { "type": "string" },
-        "password": { "type": "string", "secret": true }
-      } } },
-    "hotspot": { "type": "string", "enum": ["no_network", "always", "never"], "default": "no_network",
-      "description": "When to run the logger's own hotspot." },
+    "networks": { "type": "array", "default": [], "description": "Tried in order, e.g. the master's network first, then a bench network.", "items": { "type": "object", "fields": { "ssid": { "type": "string" }, "password": { "type": "string", "secret": true } } } },
+    "hotspot": { "type": "string", "enum": ["no_master", "no_network", "always", "never"], "default": "no_master", "description": "When to run the logger's own hotspot. no_master: while not connected to the master (after a 20 s grace), so a logger on the master's network but out of its reach can still be reached; no_network: only while no known network is joined." },
     "hotspot_password": { "type": "string", "default": "", "secret": true, "description": "Empty: an open hotspot (not recommended)." },
     "antenna": { "type": "string", "enum": ["internal", "external"], "default": "internal", "applies": "restart" },
     "enabled": { "type": "boolean", "default": true, "description": "Turn WiFi off entirely to save battery." }
@@ -18,9 +13,14 @@
   "status": {
     "mode": { "type": "string", "enum": ["station", "hotspot", "off"] },
     "connected": { "type": "boolean" },
+    "master": { "type": "boolean", "description": "Connected to the master (MQTT)." },
     "ssid": { "type": "string" },
     "ip": { "type": "string" },
-    "rssi_dbm": { "type": "integer", "unit": "dBm" }
+    "rssi_dbm": { "type": "integer", "unit": "dBm" },
+    "trying": { "type": "string", "description": "Network being looked for, while not joined." },
+    "hotspot": { "type": "string", "description": "The hotspot's name, while it's on." },
+    "hotspot_ip": { "type": "string" },
+    "clients": { "type": "integer", "description": "Devices joined to the hotspot." }
   },
   "commands": {},
   "streams": [],

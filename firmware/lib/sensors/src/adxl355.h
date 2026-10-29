@@ -97,6 +97,7 @@ private:
     uint32_t clippedBlocks_ = 0;
     uint32_t errors_ = 0;
     uint32_t resets_ = 0;
+    uint8_t lastId_[3] = {0, 0, 0};  // ID bytes from the last probe, for wiring diagnosis
 };
 
 }  // namespace logger

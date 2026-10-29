@@ -35,6 +35,16 @@
   .status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
   .dot.on { background: var(--ok); }
+  /* Battery badge: level colours follow the logger's thresholds (protocol/features/battery.json) */
+  .batt { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 6px;
+          border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .batt .cell { position: relative; width: 28px; height: 13px; border: 2px solid var(--muted); border-radius: 3px; }
+  .batt .cell::after { content: ""; position: absolute; right: -5px; top: 2px; width: 3px; height: 5px;
+                       background: var(--muted); border-radius: 0 1px 1px 0; }
+  .batt .fill { height: 100%; border-radius: 1px; background: var(--ok); }
+  .batt.low .fill { background: var(--warn); } .batt.critical .fill { background: var(--err); }
+  .batt.critical { border-color: var(--err); }
+  .batt b { font-weight: 600; } .batt span { color: var(--muted); }
   main { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 12px; padding: 12px 16px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
@@ -60,7 +70,12 @@
   <button id="connect" class="primary">Connect</button>
   <button id="zero" disabled>Zero (place flat)</button>
   <button id="pause" disabled>Pause</button>
+  <button id="sdTest" disabled>Test SD</button>
   <span class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></span>
+  <span class="batt" id="batt" hidden title="Battery (MAX17048 fuel gauge)">
+    <span class="cell"><span class="fill" id="battFill"></span></span>
+    <b id="battPct"></b><span id="battInfo"></span>
+  </span>
 </header>
 <p id="msg"></p>
 <main>
@@ -146,6 +161,13 @@
       latest samples with a Hann window. Bigger FFT size = finer frequency resolution but slower to react.
       Highest frequency shown is half the sample rate.</p>
   </section>
+  <section class="panel" id="sdPanel" style="grid-column: 1 / -1" hidden>
+    <h2>SD card test</h2>
+    <p id="sdVerdict" style="margin:0;font-weight:600"></p>
+    <dl class="kv" id="sdResult"></dl>
+    <p class="hint">Writes a 64 KB test file, reads it back and compares every byte, then reads the start
+      of the newest recording to check it's a valid DLOG file. Safe while recording.</p>
+  </section>
 </main>
 
 <script>
@@ -153,6 +175,7 @@
 
 // ---------- state ----------
 let rate = 800, gPerLsb = 0.0039, rawMax = 4095;  // ADXL345 defaults; the info line overrides them
+let sdState = "";                                  // from #SD lines, shown in the status bar
 const MAX_SECONDS = 10;
 let cap = 0, head = 0, count = 0;
 let raw = [], hpf = [];                  // ring buffers [x,y,z] in g
@@ -231,7 +254,7 @@ $("connect").onclick = async () => {
     try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch {}
     $("msg").textContent = "";
     $("connect").textContent = "Disconnect";
-    ["zero", "pause"].forEach(id => $(id).disabled = false);
+    ["zero", "pause", "sdTest"].forEach(id => $(id).disabled = false);
     $("dot").classList.add("on");
     readLoop();
   } catch (e) {
@@ -246,9 +269,10 @@ async function disconnect() {
   try { if (port) await port.close(); } catch {}
   port = null; reader = null;
   $("connect").textContent = "Connect";
-  ["zero", "pause"].forEach(id => $(id).disabled = true);
+  ["zero", "pause", "sdTest"].forEach(id => $(id).disabled = true);
   $("dot").classList.remove("on");
   $("status").textContent = "Not connected";
+  $("batt").hidden = true;
 }
 
 async function readLoop() {
@@ -286,6 +310,17 @@ function handleLine(line) {
   } else if (line.startsWith("#ERROR") || line.startsWith("#WARN")) {
     sensorErrors++;
     showMsg(new Date().toLocaleTimeString() + "  " + line.slice(1));
+  } else if (line.startsWith("#BATTERY")) {
+    const v = /voltage=([\d.]+)/.exec(line), p = /percent=([\d.]+)/.exec(line);
+    if (v && p) showBattery(+p[1], +v[1], /usb=1/.test(line), /charging=1/.test(line));
+  } else if (line.startsWith("#SD ")) {
+    const present = /present=1/.test(line), free = /free_mb=(\d+)/.exec(line), file = /file=(\S+)/.exec(line);
+    sdState = present ? `💾 ${free ? (+free[1] / 1024).toFixed(1) + " GB free" : "card"}` +
+      (file && file[1] !== "-" ? " · recording" : "") : "💾 no card";
+  } else if (line.startsWith("#ack ")) {
+    let ack;
+    try { ack = JSON.parse(line.slice(5)); } catch { return; }
+    if (ack.id === "sdtest") showSdResult(ack);
   } else if (line.startsWith("#")) {
     const r = /rate=(\d+(?:\.\d+)?)/.exec(line), s = /g_per_lsb=([\d.eE+-]+)/.exec(line);
     const m = /raw_max=(\d+)/.exec(line);
@@ -343,10 +378,64 @@ $("pause").onclick = () => {
   $("pause").classList.toggle("primary", paused);
 };
 
+// ---------- battery badge ----------
+function showBattery(pct, volts, usb, charging) {
+  pct = Math.max(0, Math.min(100, pct));
+  $("batt").hidden = false;
+  $("batt").className = "batt" + (pct < 10 ? " critical" : pct < 30 ? " low" : "");
+  $("battFill").style.width = pct + "%";
+  $("battPct").textContent = pct.toFixed(0) + "%";
+  $("battInfo").textContent = `${volts.toFixed(2)} V` + (charging ? " · charging" : usb ? " · on USB" : "");
+}
+
+// ---------- SD card test (sd feature self_test command, sent over the serial console) ----------
+$("sdTest").onclick = async () => {
+  if (!port || !port.writable) return;
+  const w = port.writable.getWriter();
+  try {
+    await w.write(new TextEncoder().encode('\n{"cmd":"self_test","target":"sd","id":"sdtest"}\n'));
+    $("sdPanel").hidden = false;
+    $("sdVerdict").textContent = "Testing…";
+    $("sdVerdict").style.color = "var(--muted)";
+    $("sdResult").innerHTML = "";
+  } catch (e) {
+    showMsg("Couldn't send the SD test command: " + e.message);
+  } finally {
+    w.releaseLock();
+  }
+};
+
+function showSdResult(ack) {
+  const r = ack.result || {};
+  const pass = ack.ok && r.passed;
+  $("sdPanel").hidden = false;
+  $("sdVerdict").textContent = !ack.ok ? `Failed: ${ack.message || ack.error}` +
+      (ack.error === "unknown_target" ? " (this firmware has no SD card feature)" : "")
+    : pass ? "PASS: the card can be written and read back." : "FAIL" + (ack.message ? `: ${ack.message}` : "");
+  $("sdVerdict").style.color = pass ? "var(--ok)" : "var(--err)";
+  const yn = v => v === undefined ? "n/a" : v ? "yes" : "NO";
+  const rows = !r.mounted ? [["Card mounted", "NO"]] : [
+    ["Card", `${r.card_type}, ${(r.total_mb / 1024).toFixed(1)} GB, ${(r.free_mb / 1024).toFixed(1)} GB free`],
+    ["Bus", `${r.bus_width}-bit at ${(r.freq_khz / 1000).toFixed(0)} MHz`],
+    ["Write → read back", r.read_write_ok ? `OK (${r.write_bytes} bytes, every byte matched)`
+      : `FAILED (${r.write_bytes} written, ${r.read_bytes} read, ${r.bad_chunks} bad 4 KB chunks)`],
+    ["Speed", `write ${(r.write_kBps / 1024).toFixed(2)} MB/s, read ${(r.read_kBps / 1024).toFixed(2)} MB/s`],
+    ["Recordings", `${r.log_files} file${r.log_files === 1 ? "" : "s"} in ${r.log_dir}`],
+  ];
+  if (r.log_files) rows.push(["Newest", `${r.newest} (${(r.newest_bytes / 1024).toFixed(0)} KB) · valid DLOG: ${yn(r.newest_is_dlog)}`]);
+  $("sdResult").innerHTML = "";
+  for (const [k, v] of rows) {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = k; dd.textContent = v;
+    $("sdResult").append(dt, dd);
+  }
+}
+
 setInterval(() => {
   if (port) {
     $("status").textContent = (paused ? "PAUSED · " : "") + `${rxCount} samples/s · ${rate} Hz configured` +
-      (badSamples || sensorErrors ? ` · ${badSamples} bad samples, ${sensorErrors} sensor errors` : "");
+      (badSamples || sensorErrors ? ` · ${badSamples} bad samples, ${sensorErrors} sensor errors` : "") +
+      (sdState ? ` · ${sdState}` : "");
   }
   rxCount = 0;
 }, 1000);

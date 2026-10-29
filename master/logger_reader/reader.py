@@ -6,10 +6,18 @@
 
 Several files from the same boot (one recording split by file rolling) can be read together
 with read_session(), which joins them and applies time syncs across all of them.
+
+Files are grouped into named sessions (FILE_FORMAT.md, Sessions); find_sessions() lists the
+sessions in a folder of files copied from any number of loggers:
+
+    for s in find_sessions("D:/logs"):
+        print(s.name, s.logger, s.boots)
+        df = s.to_dataframe("accel")
 """
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -123,6 +131,10 @@ class DlogFile:
     @property
     def boot_id(self) -> int | None:
         return self.metadata.get("boot", {}).get("id")
+
+    @property
+    def session_name(self) -> str | None:
+        return session_name(self.metadata, self.source)
 
     @property
     def streams(self) -> list[dict]:
@@ -318,3 +330,96 @@ class Session:
 
 def read_session(paths: Iterable[str | Path]) -> Session:
     return Session([read_dlog(p) for p in paths])
+
+
+# ------------------------------------------------------------ sessions
+
+def session_name(metadata: dict, path: str | Path | None = None) -> str | None:
+    """The file's session: metadata session.name (v1.1), else its folder in the v1.1 layout.
+
+    v1.0 files sit in /logs/<device.id>/, which names no session, so they have none.
+    """
+    name = (metadata.get("session") or {}).get("name")
+    if name:
+        return name
+    if path is not None:
+        folder = Path(path).parent.name
+        if folder and folder not in (metadata.get("device", {}).get("id"), "logs"):
+            return folder
+    return None
+
+
+def read_metadata(path: str | Path) -> dict:
+    """Just the METADATA record (always first), without reading the whole file."""
+    with open(path, "rb") as fh:
+        head = fh.read(dlog.PREAMBLE.size + dlog.RECORD_HEADER.size)
+        dlog.check_preamble(head)
+        sync, rtype, _, length = dlog.RECORD_HEADER.unpack_from(head, dlog.PREAMBLE.size)
+        if sync != dlog.SYNC or rtype != dlog.REC_METADATA or length > dlog.MAX_PAYLOAD:
+            raise dlog.DlogError(f"{path}: first record is not METADATA")
+        payload = fh.read(length + dlog.CRC.size)
+    if len(payload) < length + dlog.CRC.size:
+        raise dlog.DlogError(f"{path}: truncated METADATA")
+    body = memoryview(payload)[:length]
+    (crc,) = dlog.CRC.unpack_from(payload, length)
+    if dlog.crc32(head[dlog.PREAMBLE.size + 2:] + bytes(body)) != crc:
+        raise dlog.DlogError(f"{path}: METADATA CRC error")
+    return dlog.parse_metadata(body)
+
+
+@dataclass
+class SessionFiles:
+    """One logger's files in one named session, possibly over several boots."""
+    name: str
+    device_id: str
+    logger: str                                  # serial, name or device id
+    files: dict[int, list[Path]] = field(default_factory=dict)   # boot id -> files in order
+
+    @property
+    def boots(self) -> list[int]:
+        return sorted(self.files)
+
+    def read(self, boot: int) -> Session:
+        return read_session(self.files[boot])
+
+    def to_dataframe(self, name: str, **kwargs) -> pd.DataFrame:
+        """Every boot's data, in boot order, with a 'boot' column.
+
+        Times from different boots only line up if each boot's clock was synced (UTC index);
+        otherwise each boot's times restart from its own power-on.
+        """
+        frames = []
+        for b in self.boots:
+            df = self.read(b).to_dataframe(name, **kwargs)
+            df["boot"] = b
+            frames.append(df)
+        out = pd.concat(frames) if frames else pd.DataFrame()
+        if frames:
+            out.attrs = dict(frames[0].attrs, boots=self.boots)
+        return out
+
+
+def find_sessions(folder: str | Path) -> list[SessionFiles]:
+    """Every (session, logger) in a folder tree of .dlog files, both v1.0 and v1.1 layouts.
+
+    Files without a session (v1.0) are grouped under the name "unnamed".
+    """
+    groups: dict[tuple[str, str], SessionFiles] = {}
+    order: dict[Path, int] = {}
+    for p in sorted(Path(folder).rglob("*.dlog")):
+        try:
+            md = read_metadata(p)
+        except (dlog.DlogError, OSError, struct.error):
+            continue
+        dev = md.get("device", {})
+        name = session_name(md, p) or "unnamed"
+        key = (name, dev.get("id", "?"))
+        s = groups.get(key)
+        if s is None:
+            s = groups[key] = SessionFiles(name, key[1], dev.get("serial") or dev.get("name") or key[1])
+        s.files.setdefault(md.get("boot", {}).get("id", -1), []).append(p)
+        order[p] = md.get("file", {}).get("index", 0)
+    for s in groups.values():
+        for paths in s.files.values():
+            paths.sort(key=lambda p: order[p])
+    return sorted(groups.values(), key=lambda s: (s.name, s.logger))

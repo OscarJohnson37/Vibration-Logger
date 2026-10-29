@@ -1,12 +1,16 @@
 // SD card storage: both the `sd` feature (status, card presence) and the "sd" recording sink
-// (DLOG files under /logs/<device_id>/, protocol/FILE_FORMAT.md). Uses the ESP32-S3 SDMMC host
+// (DLOG files under /logs/<session>/, protocol/FILE_FORMAT.md). Uses the ESP32-S3 SDMMC host
 // in 4-bit (or 1-bit) SDIO mode on any pins.
 //
 // Card removed or failing: the file is abandoned (the reader recovers everything up to the last
-// complete record), the error colour shows, and when a card is mounted again the logger opens a
-// new file and carries on.
+// complete record), the error pattern shows, and when a card is mounted again the logger opens a
+// new file and carries on. The card is asked for its status every 2 s, so a card pulled while
+// idle shows as missing straight away, not at the next write. A full card (< 1 % free) is an
+// error too (event sd_full).
 //
 // Config (sd section): "bus_width": 4 | 1, "freq_khz": 20000
+// Command: self_test - writes /selftest.bin, reads it back and verifies it, then reads the start
+// of the newest recording to check it's a DLOG file. For checking a card without a card reader.
 #pragma once
 
 #include <FS.h>
@@ -26,13 +30,15 @@ public:
     // Feature
     bool begin(Logger& host, JsonObjectConst config) override;
     void status(JsonObject out) const override;
-    bool ok() const override { return mounted_; }
+    bool ok() const override { return mounted_ && !full_; }
     void poll() override;  // also Sink::poll
+    bool hasCommand(const char* cmd) const override { return strcmp(cmd, "self_test") == 0; }
+    CmdStatus command(const char* cmd, JsonObjectConst args, JsonObject result, String& message) override;
 
     // Sink
     const char* name() const override { return "sd"; }
     bool available() override { return mounted_; }
-    bool open(const String& metadataJson, const String& deviceId, uint32_t bootId, uint32_t fileIndex) override;
+    bool open(const String& metadataJson, const String& session, const String& fileName) override;
     void write(const SampleBlock& b) override;
     void marker(uint64_t tMonoUs, const String& json) override;
     void flush() override;
@@ -45,12 +51,18 @@ private:
     bool mount();
     void fail(const char* why);  // writer task: abandon the card until it's remounted
     void checkWrites();
+    bool cardResponds();
+    void updateSpace();
+    void pinCheck(JsonObject out);  // self_test diagnosis: open joints, shorts, bridges
 
+    Logger* host_ = nullptr;
     Pins pins_;
     bool oneBit_ = false;
     int freqKhz_ = 20000;
 
     volatile bool mounted_ = false;
+    bool full_ = false;
+    uint32_t lastPresenceCheck_ = 0;
     volatile bool needReopen_ = false;  // a file was lost to an error; reopen once remounted
     volatile bool fileOpen_ = false;
     uint32_t lastMountTry_ = 0;

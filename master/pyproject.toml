@@ -1,16 +1,21 @@
 [project]
 name = "logger-master"
-version = "0.1.0"
-description = "Master-side tools for the logger ecosystem: DLOG reader (and later the fleet service)"
+version = "0.2.0"
+description = "Master-side tools for the logger ecosystem: DLOG reader, fleet service and dashboard"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pandas>=2.0"]
 
 [project.optional-dependencies]
 capture = ["pyserial>=3.5"]
-test = ["pytest>=7"]
+server = ["paho-mqtt>=2.0", "fastapi>=0.110", "uvicorn>=0.27", "pyyaml>=6"]
+dev-broker = ["amqtt>=0.11"]
+test = ["pytest>=7", "paho-mqtt>=2.0", "fastapi>=0.110", "pyyaml>=6"]
 
 [tool.setuptools]
-packages = ["logger_reader"]
+packages = ["logger_reader", "logger_master"]
+
+[tool.setuptools.package-data]
+logger_master = ["static/*", "static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -24,7 +24,12 @@ void CoreFeature::status(JsonObject out) const {
     out["temperature_c"] = temperatureRead();  // ESP32-S3 die temperature (approximate)
     JsonObject t = out["time"].to<JsonObject>();
     t["synced"] = host_->timeSynced();
+    if (host_->timeSynced()) {
+        t["source"] = host_->timeSource();
+        t["last_sync_age_s"] = host_->lastSyncAgeS();
+    }
     out["free_heap"] = ESP.getFreeHeap();
+    out["reset_reason"] = host_->resetReason();
 }
 
 bool CoreFeature::hasCommand(const char* cmd) const {
@@ -56,14 +61,13 @@ CmdStatus CoreFeature::command(const char* cmd, JsonObjectConst args, JsonObject
     if (!strcmp(cmd, "get_config")) {
         result["config"].set(host_->config().as<JsonObjectConst>());
         stripSecrets(result["config"]);
+        if (host_->net()) host_->net()->announce();
         return CmdStatus::Ok;
     }
-    if (!strcmp(cmd, "set_config")) {
-        message = "config storage (internal flash) arrives in phase 3";
-        return CmdStatus::Failed;
-    }
+    if (!strcmp(cmd, "set_config")) return host_->setConfig(args["changes"].as<JsonObjectConst>(), result, message);
     if (!strcmp(cmd, "sync_time")) {
-        message = "no network time source yet (phase 5); use set_time";
+        if (host_->net() && host_->net()->syncTime()) return CmdStatus::Ok;
+        message = "no time server (not connected to the master); use set_time";
         return CmdStatus::Failed;
     }
     if (!strcmp(cmd, "set_time")) {
@@ -72,6 +76,7 @@ CmdStatus CoreFeature::command(const char* cmd, JsonObjectConst args, JsonObject
             return CmdStatus::InvalidArgs;
         }
         host_->setTime(args["utc_ms"].as<int64_t>(), "manual");
+        host_->event("time_synced", "core");
         return CmdStatus::Ok;
     }
     if (!strcmp(cmd, "reboot")) {
@@ -93,13 +98,21 @@ void CoreFeature::poll() {
 bool RecordingFeature::begin(Logger& host, JsonObjectConst config) {
     host_ = &host;
     autostart_ = config["autostart"] | true;
+    autostartWithMaster_ = config["autostart_with_master"] | false;
     startDelayS_ = constrain(config["start_delay_s"] | 10, 0, 3600);
     flushIntervalS_ = constrain(config["flush_interval_s"] | 5, 1, 60);
     fileMaxMinutes_ = constrain(config["file_max_minutes"] | 60, 1, 1440);
     fileMaxMb_ = constrain(config["file_max_mb"] | 256, 1, 3900);
-    if (autostart_) {
+    if (host.resumeRecording()) {
+        // It was recording when it stopped running: carry on, master or not, after the usual delay
+        resuming_ = true;
         counting_ = true;
         countdownUntil_ = millis() + startDelayS_ * 1000;
+        autostartState_ = "resuming";
+    } else if (autostart_) {
+        counting_ = true;
+        countdownUntil_ = millis() + startDelayS_ * 1000;
+        autostartState_ = "counting";
     }
     return true;
 }
@@ -109,14 +122,33 @@ uint32_t RecordingFeature::countdownRemainingMs() const {
     return counting_ && left > 0 ? uint32_t(left) : 0;
 }
 
+// Auto-start (PLAN.md, Recording control): after start_delay_s, unless the master is connected,
+// in which case the master decides when to record. On the master's network but not yet talking to
+// it, wait up to MASTER_WAIT_MS more, so a slow connection doesn't cause a stray recording.
 void RecordingFeature::poll() {
+    static constexpr uint32_t MASTER_WAIT_MS = 30000;
     uint32_t now = millis();
-    if (counting_ && int32_t(now - countdownUntil_) >= 0) {
+    Net* net = host_->net();
+    if (counting_ && !resuming_ && !autostartWithMaster_ && net && net->connected()) {
+        counting_ = false;
+        autostartState_ = "skipped_master";
+        host_->event("autostart_skipped", instance());
+    } else if (counting_ && int32_t(now - countdownUntil_) >= 0) {
+        if (!resuming_ && !autostartWithMaster_ && net && net->linkUp()) {
+            if (!masterWaitUntil_) masterWaitUntil_ = now + MASTER_WAIT_MS;
+            if (int32_t(now - masterWaitUntil_) < 0) {
+                autostartState_ = "waiting_for_master";
+                return;
+            }
+        }
         counting_ = false;
         String message;
-        if (!host_->startRecording("autostart", message)) {
+        if (host_->startRecording(resuming_ ? "resume" : "autostart", message)) {
+            autostartState_ = resuming_ ? "resumed" : "started";
+        } else {
             counting_ = true;  // keep retrying, e.g. until a card is inserted
             countdownUntil_ = now + 5000;
+            autostartState_ = "counting";
         }
     }
     if (!host_->recording()) return;
@@ -131,6 +163,8 @@ void RecordingFeature::poll() {
 
 void RecordingFeature::status(JsonObject out) const {
     out["recording"] = host_->recording();
+    out["session"] = host_->session();
+    out["autostart"] = autostartState_;
     if (counting_) out["countdown_s"] = (countdownRemainingMs() + 999) / 1000;
     if (host_->recording()) {
         out["file"] = host_->fileName();
@@ -150,10 +184,28 @@ bool RecordingFeature::hasCommand(const char* cmd) const {
 
 CmdStatus RecordingFeature::command(const char* cmd, JsonObjectConst args, JsonObject result, String& message) {
     if (!strcmp(cmd, "start")) {
+        if (counting_) autostartState_ = "off";
         counting_ = false;
-        return host_->startRecording("command", message) ? CmdStatus::Ok : CmdStatus::Failed;
+        const char* session = args["session"] | "";
+        if (*session) {
+            // Stored, so a reboot or auto-start carries on in the same session
+            JsonDocument changes;
+            changes["recording"]["session"] = safeName(session);
+            JsonDocument ignored;
+            CmdStatus st = host_->setConfig(changes.as<JsonObjectConst>(), ignored.to<JsonObject>(), message);
+            if (st != CmdStatus::Ok) return st;
+            if (host_->recording()) {
+                host_->rollFile();  // carry on in the new session
+                result["session"] = host_->session();
+                return CmdStatus::Ok;
+            }
+        }
+        if (!host_->startRecording("command", message)) return CmdStatus::Failed;
+        result["session"] = host_->session();
+        return CmdStatus::Ok;
     }
     if (!strcmp(cmd, "stop")) {
+        if (counting_) autostartState_ = "off";
         counting_ = false;
         host_->stopRecording("command");
         return CmdStatus::Ok;

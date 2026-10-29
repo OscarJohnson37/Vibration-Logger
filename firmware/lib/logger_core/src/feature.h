@@ -37,7 +37,7 @@ public:
     // This instance's status section (MQTT status.features.<instance>)
     virtual void status(JsonObject out) const {}
 
-    // false = this instance can't do its job (sensor missing, …): the logger shows the error colour
+    // false = this instance can't do its job (sensor missing, …): the logger shows the error pattern
     virtual bool ok() const { return true; }
 
     // Commands this feature provides (per its definition)
@@ -56,9 +56,17 @@ public:
     virtual void startAcquisition() {}
     virtual void stopAcquisition() {}
 
+    // true = this feature needs sensor blocks even when not recording (live publications), so
+    // the host keeps acquisition running from start-up
+    virtual bool wantsSamples() const { return false; }
+
     // Called about every 1 ms from the high-priority acquisition task: read sensors here and
     // submit blocks. Must not block for long. Everything else belongs in poll().
     virtual void acquire() {}
+
+    // Every block any feature submits, in the submitting task (usually acquisition): for
+    // features that summarise data (publish). Must be quick and must not block.
+    virtual void consume(const SampleBlock& b) {}
 
     // Called frequently from the main loop (housekeeping, policy, slow sensors)
     virtual void poll() {}

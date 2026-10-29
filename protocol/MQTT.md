@@ -77,7 +77,7 @@ the DLOG metadata).
 {
   "v": 1,
   "device": { "id": "9070692f3338", "serial": "VL-0001", "name": "vib-01", "type": "vibration",
-              "hardware": "TinyS3[D]", "firmware": "0.2.0" },
+              "model": "VL-P1", "hardware_rev": "A", "hardware": "TinyS3[D]", "firmware": "0.2.0" },
   "features": [
     { "instance": "core",      "feature": "core",      "version": 1 },
     { "instance": "recording", "feature": "recording", "version": 1 },
@@ -96,6 +96,9 @@ the DLOG metadata).
 }
 ```
 
+- `device.model` and `device.hardware_rev` are the product model number and revision (e.g. `VL-P1`
+  rev `A`); the master looks the model up in its catalogue (`registry/models/<model>.md`) for the
+  model's documentation and expected features.
 - `impl` names the hardware behind a feature instance, for information only.
 - `limits` narrows a feature's allowed config values to what this implementation supports
   (e.g. the ADXL355 has no ±16 g range). `set_config` outside these limits is rejected.
@@ -119,7 +122,7 @@ name, in the shape its feature definition specifies.
     "core":      { "temperature_c": 31.5, "time": { "synced": true, "source": "ntp", "last_sync_age_s": 312 } },
     "recording": { "recording": true, "file": "b000042_f0003.dlog", "started_ms": 1791266400000 },
     "sd":        { "present": true, "free_mb": 28311, "total_mb": 30436 },
-    "battery":   { "voltage": 3.92, "percent": 81, "charging": false, "usb_power": false },
+    "battery":   { "voltage": 3.92, "percent": 81, "level": "high", "charging": false, "usb_power": false, "full": false },
     "wifi":      { "ssid": "logger-net", "rssi_dbm": -58 },
     "accel":     { "ok": true, "frames": 14892000, "gaps": 0, "clipped_blocks": 2, "errors": 0 },
     "publish":   { "publications": [ { "name": "accel_1s", "sent": 3712, "skipped": 0 } ] }
@@ -170,7 +173,7 @@ master agree on what happened. `source` is the feature instance that raised it.
 
 ```json
 { "v": 1, "t": 1791270123456, "uptime_ms": 3723000, "name": "battery_low", "source": "battery",
-  "detail": { "percent": 9 } }
+  "detail": { "percent": 29 } }
 ```
 
 Each feature definition lists the events it can raise.

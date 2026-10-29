@@ -21,7 +21,8 @@ public:
     virtual bool available() { return true; }
 
     // Start a new file/stream: preamble + metadata. Returns false if it couldn't.
-    virtual bool open(const String& metadataJson, const String& deviceId, uint32_t bootId, uint32_t fileIndex) = 0;
+    // session and fileName give the file's place (FILE_FORMAT.md, Files): /logs/<session>/<fileName>
+    virtual bool open(const String& metadataJson, const String& session, const String& fileName) = 0;
     virtual void write(const SampleBlock& b) = 0;
     virtual void marker(uint64_t tMonoUs, const String& json) = 0;
     virtual void flush() {}
@@ -40,7 +41,7 @@ public:
 class UsbSink : public Sink {
 public:
     const char* name() const override { return "usb"; }
-    bool open(const String& metadataJson, const String&, uint32_t, uint32_t) override {
+    bool open(const String& metadataJson, const String&, const String&) override {
         writer_.begin(metadataJson.c_str(), metadataJson.length());
         return true;
     }

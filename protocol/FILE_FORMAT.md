@@ -1,6 +1,6 @@
-# DLOG data format, v1.0
+# DLOG data format, v1.1
 
-Status: draft v1.0, 2026-10-06
+Status: draft v1.1, 2026-10-29 (sessions)
 
 The single data format for every logger in the ecosystem. The same bytes are used for files on
 an SD card and for live network streams, and one Python reader handles both.
@@ -157,15 +157,18 @@ for the whole file. One file never spans a reboot.
 ```json
 {
   "format": "dlog",
-  "format_version": "1.0",
+  "format_version": "1.1",
   "device": {
     "id": "9070692f3338",
     "serial": "VL-0001",
     "name": "vib-01",
     "type": "vibration",
+    "model": "VL-P1",
+    "hardware_rev": "A",
     "hardware": "TinyS3[D]",
     "firmware": "0.2.0"
   },
+  "session": { "name": "pump2-baseline", "source": "config" },
   "boot": { "id": 42, "reason": "power_on" },
   "file": { "index": 3, "opened_mono_us": 3600123456 },
   "time": {
@@ -220,7 +223,10 @@ for the whole file. One file never spans a reboot.
 | `device.serial` | | Human-readable serial on the case label (e.g. `VL-0001`), assigned when the unit is built |
 | `device.name` | | Human label from config; may change between files |
 | `device.type` | ✓ | Logger type, e.g. `"vibration"` |
+| `device.model`, `device.hardware_rev` | | Product model number and hardware revision, e.g. `"VL-P1"` rev `"A"` (see `registry/models/`). Absent in older files |
 | `device.hardware`, `device.firmware` | ✓ | |
+| `session.name` | | The recording session this file belongs to (see Sessions). Absent in v1.0 files |
+| `session.source` | | Where the name came from: `"config"` (set by the user), `"date"` (named after the start time) or `"default"` (`unnamed`) |
 | `boot.id` | ✓ | Increments every boot, stored on the device. Monotonic times are only comparable within one boot |
 | `boot.reason` | | `"power_on"`, `"brownout"`, `"watchdog"`, `"software"`, … |
 | `file.index` | ✓ | File number within this boot, from 0 |
@@ -256,17 +262,36 @@ Readers convert as follows:
 
 Accuracy target: about 1 s. The ESP32 clock drifts roughly 1–2 s per day between syncs.
 
+## Sessions
+
+A **session** is a named recording, e.g. `pump2-baseline`: everything recorded for one job,
+possibly by several loggers and across reboots (a battery swap carries on in the same session).
+
+- The name is the logger's `recording.session` setting. It's stored on the logger, so an
+  automatic start after power-on records into the same session. It's set with `set_config` or
+  with the `start` command's `session` argument (which also stores it).
+- If no name is set, the logger names the session after the time recording started
+  (`2026-10-29_1430Z`, UTC) when its clock is set, or `unnamed` when it isn't.
+- Names are 1–40 characters from `A-Z a-z 0-9 - _`; anything else is replaced with `_`.
+- Every file records its session in the metadata (`session.name`). Files from several loggers
+  copied into one folder can be grouped by it.
+
 ## Files on an SD card or the master
 
 The same layout is used by loggers writing to an SD card and by the master's stream receiver
 (for loggers that have no card and stream instead):
 
 ```
-/logs/<device.id>/b<boot.id, 6 digits>_f<file.index, 4 digits>.dlog
-/logs/9070692f3338/b000042_f0003.dlog
+/logs/<session>/<logger>_b<boot.id, 6 digits>_f<file.index, 4 digits>.dlog
+/logs/pump2-baseline/VL-0001_b000042_f0003.dlog
+/logs/unnamed/9070692f3338_b000043_f0000.dlog
 ```
 
-Names don't depend on wall-clock time, which may be unknown when a file is opened.
+- `<logger>` is the serial number (`device.serial`) if set, otherwise the name from config,
+  otherwise `device.id` (with the same character rules as session names).
+- Boot and file numbers keep every file name unique, so one session's files never collide,
+  whatever the clock says. The time is in the metadata, not the name.
+- v1.0 writers used `/logs/<device.id>/b<boot>_f<file>.dlog`; readers accept both.
 
 Writers must:
 
@@ -309,3 +334,4 @@ a new file (a new preamble and METADATA) when it reconnects.
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-10-06 | First version |
+| 1.1 | 2026-10-29 | Sessions: `session` in the metadata, session-based file layout |

@@ -16,7 +16,7 @@ import numpy as np
 
 MAGIC = b"\x89DLG\r\n\x1a\n"
 VERSION_MAJOR = 1
-VERSION_MINOR = 0
+VERSION_MINOR = 1  # 1.1: sessions
 PREAMBLE = struct.Struct("<8sHHI")  # magic, major, minor, reserved
 SYNC = b"\xa5\x5a"
 RECORD_HEADER = struct.Struct("<2sBBI")  # sync, type, flags, length

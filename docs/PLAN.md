@@ -76,14 +76,18 @@ firmware/
     bench_adxl345/        # breadboard ADXL345 streaming for the accel viewer (temporary; exists)
     vibration/main.cpp    # picks features + settings; ~100 lines, no plumbing          (phase 2)
 protocol/
-  FILE_FORMAT.md          # DLOG data format spec, v1.0                  (exists)
+  FILE_FORMAT.md          # DLOG data format spec, v1.1 (sessions)       (exists)
   MQTT.md                 # topics + JSON payload schemas, v1            (exists)
   features/               # feature definitions (core, recording, accel, …)   (exists)
 master/
-  logger_reader/          # Python package: read DLOG -> pandas, capture tool  (phase 2)
-  fleet/                  # MQTT service, dashboard, CLI                 (phase 5)
+  logger_reader/          # Python package: read DLOG -> pandas, sessions, capture tool  (exists)
+  logger_master/          # fleet service (MQTT), dashboard, simulator   (phase 5, exists)
 registry/
-  devices.yaml            # device registry: serials, assignments, expected features (phase 3)
+  devices.yaml            # device registry: serials, assignments, expected features (exists)
+  models/                 # model catalogue: one page per model (VL-P1.md): specs, LEDs, instructions (exists)
+  views/                  # per-logger orientation view settings and 3D models (dashboard; exists)
+deploy/
+  ubuntu/                 # master PC setup: hotspot, Mosquitto, mDNS, chrony, service (exists)
 tools/
   accel-viewer/           # browser bench viewer for the ADXL345 (temporary; exists)
 docs/
@@ -147,35 +151,52 @@ adding a feature class; nothing else changes.
 
 ## Device identity and registry
 
+Three identifiers, from the design down to the chip:
+
+| | Example | Identifies | Set by |
+|---|---|---|---|
+| **Model number** + hardware revision | `VL-P1` rev `A` | The product design: portable vibration logger (TinyS3[D], ADXL355, SD) | The firmware for that model (`device.model`, `device.hardware_rev`) |
+| **Serial number** | `VL-0001` | One physical unit | Once when it's built, over USB |
+| **`device_id`** | `9070692f3338` | The chip (ESP32 MAC) | Automatic, permanent |
+
+- **Model number:** `VL-P1` = Vibration Logger, Portable, model 1. Each model has a page in the
+  **model catalogue**, `registry/models/<model>.md`: specs, the LED guide, operating
+  instructions, set-up of a new unit, pin map and troubleshooting, plus the features every unit
+  of that model should have. The master dashboard shows it on each logger's About tab.
+- **Serial number** (`VL-0001` scheme: model family prefix + 4-digit number): assigned once when
+  a unit is built, stored in the board's NVS (survives firmware updates and SD card swaps),
+  printed on a label on the case with the model number. Set over USB with a one-off
+  `serial VL-0001` command. Included in every DLOG file (`device.serial`) and in `info`.
 - **`device_id`**: the ESP32 MAC. Permanent and unique, automatic.
-- **Serial number** (e.g. `VL-0001`): assigned once when a unit is built, stored in the board's
-  NVS (survives firmware updates and SD card swaps), printed on a label on the case. Set over
-  USB with a one-off serial command. Included in every DLOG file (`device.serial`) and in `info`.
 - **The device is the authority on what it can do** (its `info` lists its features). The
   **registry** records what the device can't know about itself:
 
 | Field | Example | Source |
 |---|---|---|
 | `device_id`, serial | `9070692f3338`, `VL-0001` | Device (auto-added on first contact) |
-| Type, hardware revision | `vibration`, rev A | At build |
-| Expected features/options | `env` fitted, external antenna | At build |
+| Type, model, hardware revision | `vibration`, `VL-P1`, rev A | Device (`info`), or at build |
+| Expected features/options | `env` fitted, external antenna | The model's catalogue page; set per unit only for exceptions |
 | Sensor details | ADXL355 board serial, calibration offsets | Manual / calibration |
 | Assignment | "Pump house 2, motor DE", since date | Manual, changes over time |
 | Last seen | firmware, IP, battery, last contact | Automatic from `status` / `info` |
 | Notes | "Replaced SD card 2026-11" | Manual |
 
 - The master **compares expected vs advertised** and flags differences (e.g. "VL-0003 should
-  have `env` but doesn't").
+  have `env` but doesn't"). Expected features come from the unit's own registry entry if set
+  there, otherwise from its model's catalogue page; a logger of an unknown model falls back to
+  what it reported on first contact.
 - **Storage:** start as a file in the repo (`registry/devices.yaml`): easy to edit by hand,
   version history, fine for a handful of units. The master loads it; it can move into a
   database later if the fleet grows.
 
 ## Network and connecting loggers
 
-- **The master's own network:** a dedicated 2.4 GHz router/access point (not the PC's hotspot),
-  not connected to corporate WiFi. Avoids enterprise logins, guest-network client isolation and
-  blocked mDNS, and keeps unmanaged devices off IT's network. Ethernet loggers plug into the
-  same router.
+- **The master's own network:** for now the **Ubuntu PC (master)** runs a 2.4 GHz WPA2 hotspot
+  itself (NetworkManager shared mode: the PC is 10.42.0.1 and hands out addresses), set up by
+  `deploy/ubuntu/hotspot.sh`. Later a dedicated router can take over; only the loggers'
+  `wifi.networks` changes. Either way it's not connected to corporate WiFi: that avoids
+  enterprise logins, guest-network client isolation and blocked mDNS, and keeps unmanaged
+  devices off IT's network. Ethernet loggers plug into the same network.
 - **Ethernet loggers need no setup:** plug in, get an address by DHCP, carry on below.
 - **One set of WiFi credentials for the whole fleet**, so connecting a new WiFi logger means
   giving it the same network details (`wifi.networks`, a list tried in order: master network
@@ -284,16 +305,24 @@ Accuracy target: roughly a second is fine. The master is the time source.
   hiccups can't cause dropped samples.
 - **Power profiles**: `always_on` (mains), or `duty_cycle` (battery): record window → deep
   sleep → wake, briefly connect, report status, pick up commands.
-- **Status LED**: the same colour codes on every logger (see below).
+- **Status LEDs**: the same patterns on every logger (see below).
 
 ### Recording control (no button)
 
-Loggers have a **power switch and a status LED, but no button**. Recording is controlled by
+Loggers have a **power switch and status LEDs, but no button**. Recording is controlled by
 power-on behaviour, config and the network:
 
-- **Auto-start:** after power-on, the logger counts down and then starts recording. Config
-  `record.autostart` (default `true`) and `record.start_delay_s` (default `10`). The delay lets
-  you mount it and step away; a `recording` start marker goes in the file regardless.
+- **Auto-start, unless the master is in control:** after power-on, the logger counts down and
+  then starts recording. Config `recording.autostart` (default `true`) and
+  `recording.start_delay_s` (default `10`). The delay lets you mount it and step away; a
+  `recording` start marker goes in the file regardless.
+- **Connected to the master: no auto-start.** If the logger is connected to the master, the
+  master decides when to record, so the countdown is cancelled (event `autostart_skipped`,
+  status `recording.autostart: "skipped_master"`) and recording waits for a `start` command.
+  If WiFi has joined a network but MQTT isn't connected yet when the countdown ends, it waits up
+  to 30 s more (`waiting_for_master`) before starting anyway. `recording.autostart_with_master`
+  (default `false`) restores auto-start even with the master connected. Away from the master
+  (in the field), auto-start works as before.
 - **Every power-on re-applies the config.** Stopping over WiFi only lasts until the next power
   cycle, unless `autostart` has been turned off. A crash or brownout therefore resumes
   recording by itself, in a new file (new `boot.id`).
@@ -303,7 +332,7 @@ power-on behaviour, config and the network:
 - **Switching off while recording** loses at most the last flush interval (default 5 s).
   Earlier data and files are safe. Stop over WiFi first for a perfectly clean END.
 - **Faults clear themselves:** if a sink is unavailable (SD card missing, network down) or a
-  sensor is missing, the logger shows the error colour and keeps retrying, so inserting a card
+  sensor is missing, the logger shows the error pattern and keeps retrying, so inserting a card
   or restoring the link starts recording without a button.
 
 ### Web interfaces
@@ -311,26 +340,49 @@ power-on behaviour, config and the network:
 Both send the same commands, so there's one control model:
 
 1. **Master dashboard** (phase 5): a web page on the master PC, talking to every logger over MQTT.
-2. **Logger-hosted page** (phase 5): the logger runs its own WiFi hotspot when it can't find the
-   master, serving a small page for start/stop, status and settings. For the portable logger
-   in the field, from a phone, with no master present.
+2. **Logger-hosted page** (phase 5): the logger runs its own WiFi hotspot (`VL-xxxxxx`,
+   http://192.168.4.1) whenever it isn't connected to the master (`wifi.hotspot: "no_master"`,
+   the default, after a 20 s grace). The page shows status, sets the WiFi networks to join and,
+   **only while the master isn't connected**, has recording controls: name the session and
+   start, or pause (stop). `POST /recording` with `action=start|stop` and optional
+   `session=<name>` (start with a session names it and starts, or moves an ongoing recording
+   into it; stop pauses until the next start or power-on). With the master connected the
+   controls are hidden (`wifi.master` in status), so there's one place in control at a time.
+   For the portable logger in the field, from a phone, with no master present.
 
-### Status LED
+### Status LEDs
 
-An external **RGB LED mounted in the case wall** (common-cathode, 3 PWM pins with resistors:
-zero idle current and reliable at 3.3 V; a single-pin WS2812-type LED is the fallback if pins
-run short, at ~1 mA idle). The onboard RGB LED mirrors it for bench use. Short blinks, not
-steady light, to save battery.
+Two **single-colour LEDs mounted in the case wall**, each on a PWM pin through a resistor (zero
+idle current, reliable at 3.3 V; ~330 Ω-1 kΩ, 1-3 mA is plenty for an indicator). Each LED has
+one job and is read by its pattern. Short pulses, not steady light, while on battery. The
+onboard RGB LED mirrors them on its green and blue channels for bench use. `core.led_brightness`
+dims both.
 
-| Colour / pattern | Meaning |
+**Green: logger status**
+
+| Pattern | Meaning |
 |---|---|
-| Blue blinking, faster near the end | Countdown before recording |
-| Green short blink every few seconds | Recording |
-| Cyan short blink | Recording and connected to the master |
-| Slow white pulse | Idle: stopped, or auto-start off |
-| Yellow blink | Recording with a warning: battery low, clock not synced, clipping |
-| Red fast blink | Can't record: no SD card or sensor fault (retrying) |
-| Rapid white flashing | `identify` command |
+| Blinking, faster near the end | Countdown before recording |
+| Short pulse every 3 s | Recording |
+| Double pulse every 3 s | Recording and connected to the master |
+| Slow breathing | Idle: stopped, or auto-start off |
+| 1 Hz short blink | Recording with a warning: clock not synced, clipping |
+| Fast blink | Can't record: no SD card or sensor fault (retrying) |
+| Rapid flashing (both LEDs) | `identify` command |
+
+**Blue: power** (set by the `battery` feature; thresholds are its config, with 3 % hysteresis)
+
+| Pattern | Meaning |
+|---|---|
+| Off | On battery, above 70 % (`medium_pct`), or no fuel gauge |
+| Single pulse every 4 s | On battery, 30-70 % |
+| Double pulse every 4 s | On battery, 10-30 % (`low_warning_pct`, `battery_low` event) |
+| Burst of 5 fast flashes every 2 s | On battery, below 10 % (`critical_pct`, `battery_critical` event) |
+| Slow breathing | On USB, charging |
+| Steady | On USB, full: at least 95 % and charge rate ~0 for a minute (the charger's "done" signal isn't wired to the ESP32, so it's inferred from the fuel gauge) |
+
+The same information is in the `battery` status (`percent`, `level`, `charging`, `full`,
+`usb_power`), so the master dashboard shows it once WiFi and MQTT arrive in phase 5.
 
 ## Hardware: portable vibration logger
 
@@ -349,28 +401,33 @@ steady light, to save battery.
 **Data rate is small:** ADXL355 at 4 kHz × 3 axes × 20-bit ≈ 36 kB/s. Either SD mode
 handles that easily. SDIO is chosen for headroom and lower CPU load.
 
-**Pin map** (in `firmware/loggers/vibration/main.cpp`). 14 of the 14 usable GPIOs (17 exposed,
-minus I2C on 8/9 and the IO0 boot pin): it fits, with no spare. If more pins are needed, run SD
-in 1-bit SDIO mode (`sd.bus_width: 1`, frees D1-D3; still far faster than the 36 kB/s needed) or
-use a single-pin WS2812-type LED (frees 2).
+**Pin map** (in `firmware/loggers/vibration/main.cpp`). 12 of the 14 usable GPIOs (17 exposed,
+minus I2C on 8/9 and the IO0 boot pin), leaving IO43 and IO44 spare. If more pins are needed,
+run SD in 1-bit SDIO mode (`sd.bus_width: 1`, frees D1-D3; still far faster than the 36 kB/s
+needed).
 
-| TinyS3[D] pin | Connects to | Notes |
-|---|---|---|
-| IO34 | ADXL355 CS (PMOD pin 1) | own SPI bus (HSPI) |
-| IO35 | ADXL355 MOSI (pin 2) | |
-| IO37 | ADXL355 MISO (pin 3) | |
-| IO36 | ADXL355 SCLK (pin 4) | |
-| IO7 | ADXL355 DRDY (pin 10) | wired for future use; the FIFO is polled |
-| IO1 | SD CLK | SDMMC host, 4-bit |
-| IO2 | SD CMD (SI) | |
-| IO3 | SD D0 (SO) | |
-| IO4 | SD D1 | |
-| IO5 | SD D2 | |
-| IO6 | SD D3 (CS) | |
-| IO8 / IO9 | I2C SDA / SCL | onboard fuel gauge; BME280 when fitted |
-| IO21 / IO43 / IO44 | case RGB LED R / G / B | phase 4 (onboard LED used until then) |
-| IO0 | free | BOOT strap pin: anything holding it low at reset enters download mode |
-| 3V3 / GND | ADXL355 VDD (pins 6, 12) and DGND (5, 11); SD 3V and GND | 3.3 V only for both |
+The ADXL355 and LEDs are on the BAT-side header and the SD card on the RX/TX side, so each
+board's wires run straight across from one edge. Any GPIO works for SPI/SDMMC/PWM on the
+ESP32-S3, so this is purely a layout choice.
+
+| TinyS3[D] pin | Header side | Connects to | Notes |
+|---|---|---|---|
+| IO4 | BAT side | ADXL355 CS (PMOD pin 1) | own SPI bus (HSPI) |
+| IO21 | BAT side | ADXL355 MOSI (pin 2) | |
+| IO5 | BAT side | ADXL355 MISO (pin 3) | |
+| IO3 | BAT side | ADXL355 SCLK (pin 4) | |
+| IO1 | BAT side | case LED, blue (power) | PWM; resistor to the LED anode, cathode to GND |
+| IO2 | BAT side | case LED, green (status) | PWM; as above |
+| IO34 | RX/TX side | SD CLK | SDMMC host, 1-bit at 20 MHz (bench: ~1.1 MB/s write, logger needs ~40 kB/s) |
+| IO6 | RX/TX side | SD CMD (SI) | |
+| IO37 | RX/TX side | SD D0 (SO) | |
+| IO7, IO35, IO36 | RX/TX side | free | SD DAT1, DAT2 and CS are left unwired in 1-bit mode (the breakout holds CS high) |
+| IO8 / IO9 | RX/TX side | I2C SDA / SCL | onboard fuel gauge; BME280 when fitted |
+| IO43 / IO44 | RX/TX side (TX / RX) | spare | UART0: the ROM boot log toggles TX at reset |
+| IO0 | BAT side | free | BOOT strap pin: anything holding it low at reset enters download mode |
+| 3V3 / GND | BAT side / RX/TX side | ADXL355 VDD (pins 6, 12) and DGND (5, 11); SD 3V and GND | 3.3 V only for both |
+
+ADXL355 DRDY (pin 10) isn't wired: the firmware polls the FIFO instead.
 The sensor and SD card are on **separate buses**, so slow SD writes can never delay sensor reads.
 
 **Power switch:** between the LiPo and the TinyS3[D]'s BAT input. Off means zero drain (safe
@@ -422,9 +479,9 @@ connected → roughly 1.5-3 days on 3000 mAh. Periodic WiFi instead of always-on
 | 1 | Restructure repo; write `FILE_FORMAT.md` + `MQTT.md` v1 (done)                                            | Agreed contracts before code                   |
 | 1b | Feature model: feature definitions, MQTT/DLOG updates for features, serials, groups (done)               | Common interfaces across different devices     |
 | 2 | Core: feature host, DLOG writer, sinks (USB now, SD when wired), config, timekeeping, auto-start + status LED, **simulated accel**; Python reader + capture tool + tests; acquisition/writer tasks with a PSRAM buffer (**built**: compiles, Python tests pass; on-board test outstanding) | Full data path end-to-end without real sensors |
-| 3 | ADXL355 feature + SD sink on the Adafruit 4682 (**written, compiles; wiring and on-board test next**); sample-rate stability and SD throughput; config store in internal flash (+ optional SD `config.json`), `set_config`; serial number provisioning; registry file | The portable logger is usable |
+| 3 | ADXL355 feature + SD sink on the Adafruit 4682 (**tested on hardware**: 4000 Hz, no gaps; SD 1-bit 20 MHz ~1 MB/s); config store in internal flash + `set_config` (**built**; SD `config.json` still to do); named sessions (**built**); serial number + WiFi provisioning over USB; registry file | The portable logger is usable |
 | 4 | Battery: power manager, fuel gauge (MAX17048 onboard), sleep/duty-cycle                                   | Portable logger is field-ready                 |
-| 5 | Master AP setup; WiFi + MQTT status/commands + publications; NTP; fleet service, master dashboard, logger-hosted web page | Remote control and monitoring |
+| 5 | Master: Ubuntu PC hotspot, Mosquitto, mDNS, chrony (`deploy/ubuntu`); fleet service + dashboard (fleet view, control, sessions, config editor, registry, live plots, orientation) + simulator (**built**: `master/logger_master`, tested against the simulator); WiFi + MQTT status/commands + publications; NTP; logger-hosted web page | Remote control and monitoring |
 | 6 | `NetSink` + master stream receiver; Ethernet board support; OTA updates                                 | Streaming loggers                              |
 | 7 | Second logger type                                                                                        | The abstraction actually works                 |
 
@@ -434,14 +491,15 @@ blocks them, because the sink interface and file format are designed for streami
 ## Open questions
 
 1. ~~What is being measured~~: decided: machinery. ±8 g, 4000 Hz by default (see Hardware).
-2. ~~SD card interface~~: decided: Adafruit 4682 on SDMMC 4-bit.
+2. ~~SD card interface~~: decided: Adafruit 4682 on SDMMC, 1-bit at 20 MHz (4-bit supported; 10 MHz measured ~45 kB/s on this core, so use 20 MHz).
 3. Battery life target for the portable logger? Keeping WiFi connected most of the time costs
    power (roughly 20-100 mA), so this decides whether WiFi stays on or connects periodically.
-4. ~~Master AP~~: decided: a dedicated 2.4 GHz router/access point (see Network).
+4. ~~Master AP~~: decided: the Ubuntu PC (master) runs the hotspot for now; a dedicated router later (see Network).
 5. Is OTA firmware update over the network wanted, or is USB flashing fine?
 6. ~~Start on power-up or wait for a command~~: decided: auto-start after a configurable delay
    (default 10 s), no button; start/stop/config over WiFi (see Recording control).
 7. Which SD board is in hand for phase 2: the Adafruit 4682 (SDIO), or the generic adapter (SPI)
    for now? (Phase 2 proceeds with a USB sink until then.)
 8. ~~Registry location~~: decided: start as `registry/devices.yaml` in the repo.
-9. Serial number scheme: `VL-0001` style (type prefix + number)?
+9. ~~Serial number scheme~~: decided: `VL-0001` (model family prefix + 4-digit number), with the
+   model number `VL-P1` rev `A` (see Device identity).

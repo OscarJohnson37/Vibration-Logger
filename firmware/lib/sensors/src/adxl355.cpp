@@ -76,7 +76,7 @@ void Adxl355::writeReg(uint8_t reg, uint8_t value) {
 bool Adxl355::configure() {
     writeReg(REG_RESET, 0x52);
     delay(10);
-    uint8_t id[3];
+    uint8_t* id = lastId_;
     readRegs(REG_DEVID_AD, id, 3);
     if (id[0] != 0xAD || id[1] != 0x1D || id[2] != 0xED) return false;
     writeReg(REG_RANGE, RANGE_I2C_HS | rangeCode_);
@@ -170,6 +170,12 @@ void Adxl355::status(JsonObject out) const {
     out["errors"] = errors_;
     out["resets"] = resets_;
     if (!isnan(temperatureC_)) out["temperature_c"] = temperatureC_;
+    if (!ok_) {
+        // Expected AD 1D ED. All 00 or all FF: no power or MISO not connected; other values: SCLK/MOSI/CS
+        char id[12];
+        snprintf(id, sizeof(id), "%02X %02X %02X", lastId_[0], lastId_[1], lastId_[2]);
+        out["id_read"] = id;
+    }
 }
 
 void Adxl355::streamMetadata(size_t, JsonObject out) const {
@@ -324,7 +330,7 @@ void Adxl355::readAverage(float out[3], int samples) {
 
 CmdStatus Adxl355::command(const char* cmd, JsonObjectConst, JsonObject result, String& message) {
     if (strcmp(cmd, "self_test") != 0) return CmdStatus::Unsupported;
-    if (running_) {
+    if (host_->recording()) {
         message = "stop recording first";
         return CmdStatus::Busy;
     }
@@ -341,6 +347,11 @@ CmdStatus Adxl355::command(const char* cmd, JsonObjectConst, JsonObject result, 
     writeReg(REG_SELF_TEST, 0x00);
     delay(50);
     drainFifo();
+    if (running_) {
+        // Acquisition kept running for live publications: mark the frames the test used as a gap
+        frameIndex_ = uint64_t(double(host_->monoUs() - t0_) * odrHz_ / 1e6);
+        pendingFlags_ |= FLAG_GAP;
+    }
 
     // Pass/fail criteria are provisional until checked against the datasheet limits on real units
     bool passed = true;

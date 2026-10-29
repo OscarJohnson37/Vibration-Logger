@@ -2,18 +2,21 @@
   "feature": "recording",
   "version": 1,
   "multi_instance": false,
-  "description": "When to record, and how data is split into files. Loggers have no button: recording starts automatically after power-on unless configured otherwise, and can be started or stopped remotely.",
+  "description": "When to record, and how data is split into files. Loggers have no button: recording starts automatically after power-on unless the master is connected (it's in control then) or configured otherwise, and can be started or stopped remotely.",
   "config": {
-    "autostart": { "type": "boolean", "default": true, "description": "Start recording automatically after power-on." },
+    "autostart": { "type": "boolean", "default": true, "description": "Start recording automatically after power-on, when not connected to the master (see autostart_with_master)." },
+    "autostart_with_master": { "type": "boolean", "default": false, "description": "Also auto-start when connected to the master. Default false: with the master connected, recording waits for a start command. The countdown waits up to 30 s extra while WiFi has joined but MQTT isn't connected yet, and is cancelled if the master connects before it ends." },
     "start_delay_s": { "type": "integer", "default": 10, "min": 0, "max": 3600, "unit": "s", "description": "Countdown before auto-start." },
+    "session": { "type": "string", "default": "", "max_length": 40, "applies": "new_file", "description": "Session name for new recordings (FILE_FORMAT.md, Sessions). Empty: named after the start time, or 'unnamed' if the clock isn't set." },
     "flush_interval_s": { "type": "integer", "default": 5, "min": 1, "max": 60, "unit": "s", "description": "Maximum data lost on a power cut." },
     "file_max_minutes": { "type": "integer", "default": 60, "min": 1, "max": 1440, "unit": "min" },
     "file_max_mb": { "type": "integer", "default": 256, "min": 1, "max": 3900, "unit": "MB" },
-    "sinks": { "type": "array", "items": { "type": "string", "enum": ["sd", "netstream", "usb"] }, "default": null,
-      "applies": "new_file", "description": "Where recorded data goes. Default (null): every sink this logger has; a logger without an SD card simply has no sd sink. usb streams DLOG over the USB serial port (bench use)." }
+    "sinks": { "type": "array", "items": { "type": "string", "enum": ["sd", "netstream", "usb"] }, "default": null, "applies": "new_file", "description": "Where recorded data goes. Default (null): every sink this logger has; a logger without an SD card simply has no sd sink. usb streams DLOG over the USB serial port (bench use)." }
   },
   "status": {
     "recording": { "type": "boolean" },
+    "autostart": { "type": "string", "enum": ["counting", "waiting_for_master", "skipped_master", "started", "resuming", "resumed", "off"], "description": "counting: countdown running; waiting_for_master: countdown over, waiting to see whether the master connects; skipped_master: cancelled because the master is connected; started: auto-start ran; resuming / resumed: it was recording when it last stopped running (reset, flat battery, reboot), so it carries on after the countdown whether or not the master is connected; off: autostart disabled, or recording was started/stopped by command." },
+    "session": { "type": "string", "description": "Session being recorded (or that the next recording will use)." },
     "countdown_s": { "type": "integer", "unit": "s", "description": "Seconds until auto-start, while counting down." },
     "file": { "type": "string", "description": "Current file name." },
     "started_ms": { "type": "integer", "description": "UTC ms when recording started, or null if unsynced." },
@@ -21,7 +24,7 @@
     "bytes_written": { "type": "integer", "unit": "bytes" }
   },
   "commands": {
-    "start": { "description": "Start recording now (opens a new file). Cancels any countdown.", "args": {} },
+    "start": { "description": "Start recording now (opens a new file). Cancels any countdown. If session is given it's stored as recording.session, and an ongoing recording rolls to a new file in that session.", "args": { "session": { "type": "string", "max_length": 40, "description": "Optional session name." } } },
     "stop": { "description": "Stop recording (writes END and closes the file). Lasts until the next power-on.", "args": {} },
     "roll_file": { "description": "Close the current file and open the next.", "args": {} }
   },
@@ -29,6 +32,7 @@
   "events": {
     "recording_started": "Recording started.",
     "recording_stopped": "Recording stopped.",
+    "autostart_skipped": "Auto-start was cancelled because the master is connected.",
     "file_rolled": "A new data file was opened."
   }
 }

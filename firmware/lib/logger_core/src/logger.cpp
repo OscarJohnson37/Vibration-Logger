@@ -9,6 +9,15 @@
 
 namespace logger {
 
+String safeName(const String& in) {
+    String out;
+    for (size_t i = 0; i < in.length() && out.length() < 40; i++) {
+        char c = in[i];
+        out += isalnum(uint8_t(c)) || c == '-' || c == '_' ? c : '_';
+    }
+    return out;
+}
+
 const char* cmdStatusCode(CmdStatus s) {
     switch (s) {
         case CmdStatus::Ok: return "ok";
@@ -62,6 +71,33 @@ void* bufferAlloc(size_t n) {
     return nullptr;
 }
 
+// Applies changes to dst. Objects merge field by field, null removes, anything else replaces.
+// An array of objects with "ssid" (wifi.networks) keeps each network's stored password when the
+// change leaves it out, because published config never contains passwords.
+void mergeConfig(JsonVariant dst, JsonVariantConst src) {
+    for (JsonPairConst kv : src.as<JsonObjectConst>()) {
+        const char* key = kv.key().c_str();
+        JsonVariantConst v = kv.value();
+        if (v.isNull()) {
+            dst.remove(key);
+        } else if (v.is<JsonObjectConst>()) {
+            if (!dst[key].is<JsonObject>()) dst[key].to<JsonObject>();
+            mergeConfig(dst[key], v);
+        } else if (v.is<JsonArrayConst>()) {
+            JsonDocument old;
+            old.set(dst[key]);
+            dst[key].set(v);
+            for (JsonObject e : dst[key].as<JsonArray>()) {
+                if (!e["ssid"].is<const char*>() || e["password"].is<const char*>()) continue;
+                for (JsonObjectConst o : old.as<JsonArrayConst>())
+                    if (o["ssid"] == e["ssid"] && o["password"].is<const char*>()) e["password"] = o["password"];
+            }
+        } else {
+            dst[key].set(v);
+        }
+    }
+}
+
 }  // namespace
 
 // ------------------------------------------------------------------ setup
@@ -88,15 +124,20 @@ void Logger::begin(const char* defaultConfigJson) {
     bootId_ = prefs.getUInt("boot", 0) + 1;
     prefs.putUInt("boot", bootId_);
     serial_ = prefs.getString("serial", "");
+    String stored = prefs.getString("config", "{}");
+    resume_ = intentStored_ = prefs.getBool("recording", false);
     prefs.end();
     resetReason_ = resetReasonName(esp_reset_reason());
 
-    // Config: the logger type's compiled-in defaults for now. Phase 3 layers the stored config
-    // from internal flash on top (and config.json from an SD card, on loggers that have one).
+    // Config: the logger type's compiled-in defaults, then the changes stored in internal flash
+    // (set_config). Later: config.json on an SD card, on loggers that have one.
     if (deserializeJson(config_, defaultConfigJson ? defaultConfigJson : "{}") || !config_.is<JsonObject>()) {
         config_.clear();
         config_.to<JsonObject>();
     }
+    if (deserializeJson(stored_, stored) || !stored_.is<JsonObject>()) stored_.to<JsonObject>();
+    mergeConfig(config_.as<JsonVariant>(), stored_.as<JsonVariantConst>());
+    resolveSession();
 
     // Built-in features first, then the logger's own
     Feature* user[MAX_FEATURES];
@@ -130,6 +171,12 @@ void Logger::begin(const char* defaultConfigJson) {
     for (size_t i = 0; i < nFeatures_; i++)
         features_[i]->begin(*this, config_[features_[i]->instance()].as<JsonObjectConst>());
 
+    if (net_) net_->begin(*this);
+
+    for (size_t i = 0; i < nFeatures_; i++) liveAcquisition_ |= features_[i]->wantsSamples();
+    if (liveAcquisition_)
+        for (size_t i = 0; i < nFeatures_; i++) features_[i]->startAcquisition();
+
     xTaskCreatePinnedToCore([](void* self) { static_cast<Logger*>(self)->acquisitionTask(); },
                             "acquire", 8192, this, 10, nullptr, 1);
 }
@@ -147,6 +194,7 @@ void Logger::loop() {
             openSinks(1 << i);
         }
     }
+    if (net_) net_->poll();
     updateLed();
     led_.update();
     delay(1);
@@ -169,12 +217,83 @@ bool Logger::setSerial(const String& serial) {
     return true;
 }
 
+String Logger::label() const {
+    const char* name = config_["core"]["name"] | "";
+    return safeName(!serial_.isEmpty() ? serial_ : *name ? String(name) : deviceId_);
+}
+
+// ------------------------------------------------------------------ config
+
+CmdStatus Logger::setConfig(JsonObjectConst changes, JsonObject result, String& message) {
+    if (changes.isNull() || changes.size() == 0) {
+        message = "changes must be an object: { instance: { field: value } }";
+        return CmdStatus::InvalidArgs;
+    }
+    bool restart = false;
+    for (JsonPairConst kv : changes) {
+        const char* inst = kv.key().c_str();
+        bool known = false;
+        for (size_t i = 0; i < nFeatures_; i++) known |= strcmp(features_[i]->instance(), inst) == 0;
+        if (!known) {
+            message = String("no feature instance '") + inst + "'";
+            return CmdStatus::UnknownTarget;
+        }
+        if (!kv.value().is<JsonObjectConst>()) {
+            message = String("changes.") + inst + " must be an object";
+            return CmdStatus::InvalidArgs;
+        }
+        for (JsonPairConst f : kv.value().as<JsonObjectConst>())
+            restart |= !(strcmp(inst, "recording") == 0 && strcmp(f.key().c_str(), "session") == 0);
+    }
+    mergeConfig(stored_.as<JsonVariant>(), changes);
+    String json;
+    serializeJson(stored_, json);
+    Preferences prefs;
+    prefs.begin("logger", false);
+    const bool saved = prefs.putString("config", json) == json.length();
+    prefs.end();
+    if (!saved) {
+        message = "couldn't save to internal flash (config too large?)";
+        return CmdStatus::Failed;
+    }
+    mergeConfig(config_.as<JsonVariant>(), changes);
+    if (!recording_) resolveSession();  // while recording, the next file picks it up (openSinks)
+    result["restart_required"] = restart;
+    JsonDocument detail;
+    detail["restart_required"] = restart;
+    event("config_changed", "core", detail.as<JsonObjectConst>());
+    if (net_) net_->announce();
+    return CmdStatus::Ok;
+}
+
+// The session for the next recording: recording.session if set, else the start time (UTC) if the
+// clock is set, else "unnamed" (FILE_FORMAT.md, Sessions)
+void Logger::resolveSession() {
+    const char* configured = config_["recording"]["session"] | "";
+    if (*configured) {
+        session_ = safeName(configured);
+        sessionSource_ = "config";
+    } else if (timeSynced_) {
+        time_t t = utcMs() / 1000;
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        char name[24];
+        strftime(name, sizeof(name), "%Y-%m-%d_%H%MZ", &tm);
+        session_ = name;
+        sessionSource_ = "date";
+    } else {
+        session_ = "unnamed";
+        sessionSource_ = "default";
+    }
+}
+
 // ------------------------------------------------------------------ writer queue
 
 bool Logger::enqueue(Item& it) {
     if (!queue_ || xQueueSend(queue_, &it, 0) != pdTRUE) {
         if (it.values) heap_caps_free(it.values);
         delete it.text;
+        delete it.path;
         return false;
     }
     uint32_t used = QUEUE_DEPTH - uxQueueSpacesAvailable(queue_);
@@ -205,7 +324,12 @@ void Logger::writerTask() {
                 switch (it.kind) {
                     case Item::Open:
                         if (sinkOpen_[i]) s->close();
-                        sinkOpen_[i] = s->available() && s->open(*it.text, deviceId_, bootId_, it.fileIndex);
+                        if (s->available()) {
+                            const int slash = it.path->indexOf('/');
+                            sinkOpen_[i] = s->open(*it.text, it.path->substring(0, slash), it.path->substring(slash + 1));
+                        } else {
+                            sinkOpen_[i] = false;
+                        }
                         break;
                     case Item::Close:
                         if (sinkOpen_[i]) s->close();
@@ -236,6 +360,7 @@ void Logger::writerTask() {
         }
         if (it.values) heap_caps_free(it.values);
         delete it.text;
+        delete it.path;
     }
 }
 
@@ -279,6 +404,18 @@ bool Logger::anySinkAvailable() {
     return false;
 }
 
+// Whether someone deliberately started recording (dashboard, hotspot page, USB), kept in internal
+// flash so a reset, flat battery or reboot carries on afterwards; a deliberate stop clears it.
+// Auto-starts aren't stored: each boot decides again (and skips it when the master is connected).
+void Logger::storeIntent(bool recording) {
+    if (recording == intentStored_) return;
+    Preferences prefs;
+    prefs.begin("logger", false);
+    prefs.putBool("recording", recording);
+    prefs.end();
+    intentStored_ = recording;
+}
+
 bool Logger::startRecording(const char* reason, String& message) {
     if (recording_) return true;
     if (!anySinkAvailable()) {
@@ -286,6 +423,7 @@ bool Logger::startRecording(const char* reason, String& message) {
         return false;
     }
     recordingStartedUtcMs_ = utcMs();
+    resolveSession();
     openSinks(ALL_SINKS);
     recording_ = true;
     JsonDocument m;
@@ -293,13 +431,17 @@ bool Logger::startRecording(const char* reason, String& message) {
     m["state"] = "start";
     m["reason"] = reason;
     marker(m);
-    for (size_t i = 0; i < nFeatures_; i++) features_[i]->startAcquisition();
+    if (!liveAcquisition_)
+        for (size_t i = 0; i < nFeatures_; i++) features_[i]->startAcquisition();
+    if (strcmp(reason, "command") == 0) storeIntent(true);
     return true;
 }
 
 void Logger::stopRecording(const char* reason) {
+    if (strcmp(reason, "reboot") != 0) storeIntent(false);  // a reboot carries on afterwards
     if (!recording_) return;
-    for (size_t i = 0; i < nFeatures_; i++) features_[i]->stopAcquisition();
+    if (!liveAcquisition_)
+        for (size_t i = 0; i < nFeatures_; i++) features_[i]->stopAcquisition();
     JsonDocument m;
     m["type"] = "recording";
     m["state"] = "stop";
@@ -318,9 +460,17 @@ void Logger::rollFile() {
 }
 
 void Logger::openSinks(uint8_t mask) {
+    const char* configured = config_["recording"]["session"] | "";
+    if (*configured && safeName(configured) != session_) resolveSession();  // set_config while recording
     fileOpenedMs_ = millis();
     filesThisBoot_++;
-    enqueueText(Item::Open, mask, buildMetadata(), 0, fileIndex_);
+    Item it = {};
+    it.kind = Item::Open;
+    it.sinkMask = mask;
+    it.fileIndex = fileIndex_;
+    it.text = new String(buildMetadata());
+    it.path = new String(session_ + "/" + fileName());
+    enqueue(it);
 }
 
 void Logger::closeSinks(uint8_t mask) {
@@ -352,15 +502,17 @@ size_t Logger::fileBytes() const {
 }
 
 String Logger::fileName() const {
-    char name[32];
-    snprintf(name, sizeof(name), "b%06u_f%04u.dlog", unsigned(bootId_), unsigned(fileIndex_));
-    return name;
+    char name[24];
+    snprintf(name, sizeof(name), "_b%06u_f%04u.dlog", unsigned(bootId_), unsigned(fileIndex_));
+    return label() + name;
 }
 
 // ------------------------------------------------------------------ services for features
 
 void Logger::submit(const SampleBlock& b) {
-    if (!recording_ || !b.stream || !b.nFrames) return;
+    if (!b.stream || !b.nFrames) return;
+    for (size_t i = 0; i < nFeatures_; i++) features_[i]->consume(b);
+    if (!recording_) return;
     const size_t bytes = size_t(b.nFrames) * b.stream->nChannels * 4;  // int32 or float
     Item it = {};
     it.kind = Item::Data;
@@ -393,7 +545,20 @@ void Logger::event(const char* name, const char* source, JsonObjectConst detail)
     m["source"] = source;
     if (!detail.isNull()) m["detail"] = detail;
     marker(m);
-    // phase 5: also publish on loggers/<id>/events
+    if (net_ && net_->connected()) {
+        JsonDocument e;
+        e["v"] = 1;
+        int64_t utc = utcMs();
+        if (utc >= 0) e["t"] = utc;
+        else e["t"] = nullptr;
+        e["uptime_ms"] = millis();
+        e["name"] = name;
+        e["source"] = source;
+        if (!detail.isNull()) e["detail"] = detail;
+        String json;
+        serializeJson(e, json);
+        net_->publish("events", json, 1, false);
+    }
 }
 
 // ------------------------------------------------------------------ metadata, info, status
@@ -427,15 +592,19 @@ void writeStream(Feature& f, size_t i, JsonObject s) {
 String Logger::buildMetadata() {
     JsonDocument d;
     d["format"] = "dlog";
-    d["format_version"] = "1.0";
+    d["format_version"] = "1.1";
     JsonObject dev = d["device"].to<JsonObject>();
     dev["id"] = deviceId_;
     if (!serial_.isEmpty()) dev["serial"] = serial_;
     const char* name = config_["core"]["name"] | "";
     dev["name"] = *name ? name : serial_.c_str();
     dev["type"] = type_;
+    if (*model_) dev["model"] = model_;
+    if (*hardwareRev_) dev["hardware_rev"] = hardwareRev_;
     dev["hardware"] = hardware_;
     dev["firmware"] = firmware_;
+    d["session"]["name"] = session_;
+    d["session"]["source"] = sessionSource_;
     d["boot"]["id"] = bootId_;
     d["boot"]["reason"] = resetReason_;
     uint64_t mono = monoUs();
@@ -466,6 +635,8 @@ void Logger::buildInfo(JsonObject out) {
     const char* name = config_["core"]["name"] | "";
     dev["name"] = *name ? name : serial_.c_str();
     dev["type"] = type_;
+    if (*model_) dev["model"] = model_;
+    if (*hardwareRev_) dev["hardware_rev"] = hardwareRev_;
     dev["hardware"] = hardware_;
     dev["firmware"] = firmware_;
     JsonArray feats = out["features"].to<JsonArray>();
@@ -488,16 +659,19 @@ void Logger::buildStatus(JsonObject out) {
     if (utc >= 0) out["t"] = utc;
     else out["t"] = nullptr;
     out["uptime_ms"] = millis();
-    bool allOk = true;
-    for (size_t i = 0; i < nFeatures_; i++) allOk &= features_[i]->ok();
-    out["state"] = !allOk ? "error"
-                   : recording_ ? "recording"
-                   : recordingFeature_.countingDown() ? "starting"
-                   : "idle";
+    out["state"] = state();
     out["boot_id"] = bootId_;
     out["errors"].to<JsonArray>();
     JsonObject feats = out["features"].to<JsonObject>();
     for (size_t i = 0; i < nFeatures_; i++) features_[i]->status(feats[features_[i]->instance()].to<JsonObject>());
+}
+
+const char* Logger::state() {
+    bool allOk = true;
+    for (size_t i = 0; i < nFeatures_; i++) allOk &= features_[i]->ok();
+    if (!allOk || !anySinkAvailable()) return "error";
+    if (recording_) return "recording";
+    return recordingFeature_.countingDown() ? "starting" : "idle";
 }
 
 // ------------------------------------------------------------------ commands
@@ -543,16 +717,59 @@ void Logger::updateLed() {
         led_.set(LedPattern::Countdown);
         led_.setCountdown(recordingFeature_.countdownRemainingMs());
     } else if (recording_) {
-        led_.set(LedPattern::Recording);
+        // Double flash: recording with the master watching; single: recording on its own
+        led_.set(net_ && net_->connected() ? LedPattern::Connected : LedPattern::Recording);
     } else {
         led_.set(LedPattern::Idle);
     }
 }
 
 // ------------------------------------------------------------------ USB console (bench)
+
+// "wifi <ssid> <password>" / "wifi clear": provisioning when a unit is built (PLAN.md, Network)
+String Logger::consoleWifi(String args) {
+    args.trim();
+    JsonDocument changes;
+    if (args == "clear") {
+        changes["wifi"]["networks"].to<JsonArray>();
+    } else {
+        String ssid, password;
+        if (args.startsWith("\"")) {
+            const int end = args.indexOf('"', 1);
+            if (end < 0) return "missing closing quote";
+            ssid = args.substring(1, end);
+            password = args.substring(end + 1);
+        } else {
+            const int sp = args.indexOf(' ');
+            ssid = sp < 0 ? args : args.substring(0, sp);
+            password = sp < 0 ? "" : args.substring(sp + 1);
+        }
+        password.trim();
+        if (ssid.isEmpty()) return "usage: wifi <ssid> <password>";
+        // Keep the other networks; this one moves to the end of the list
+        JsonArray nets = changes["wifi"]["networks"].to<JsonArray>();
+        for (JsonVariantConst n : stored_["wifi"]["networks"].as<JsonArrayConst>())
+            if (n["ssid"] != ssid) nets.add(n);
+        JsonObject n = nets.add<JsonObject>();
+        n["ssid"] = ssid;
+        n["password"] = password;
+    }
+    JsonDocument result;
+    String message;
+    CmdStatus st = setConfig(changes.as<JsonObjectConst>(), result.to<JsonObject>(), message);
+    if (st != CmdStatus::Ok) return message;
+    String list;
+    for (JsonVariantConst n : config_["wifi"]["networks"].as<JsonArrayConst>())
+        list += (list.isEmpty() ? "" : ", ") + String(n["ssid"] | "");
+    return "networks: [" + list + "]; reboot to apply";
+}
+
 //
 //   dlog              restart the USB DLOG stream with fresh metadata (used by capture)
 //   serial VL-0001    store this unit's serial number (once, when it's built)
+//   wifi <ssid> <password>   store the network to join (quote an SSID with spaces: "My Phone");
+//                     a second line adds a second network after it. Applies after a reboot.
+//   wifi clear        forget all networks
 //   info / status     print MQTT-style info/status JSON, prefixed with '#'
 //   {"cmd": ...}      run a command exactly as MQTT would; prints the ack, prefixed with '#'
 // Output goes through the writer queue, so it never lands inside a binary DLOG record.
@@ -580,11 +797,13 @@ void Logger::consoleLine(String line) {
         String s = line.substring(7);
         s.trim();
         out = String("#serial ") + (setSerial(s) ? serial_ : String("invalid (1-32 characters)")) + "\n";
+    } else if (line.startsWith("wifi ")) {
+        out = "#wifi " + consoleWifi(line.substring(5)) + "\n";
     } else if (line == "info" || line == "status") {
         JsonDocument d;
         line == "info" ? buildInfo(d.to<JsonObject>()) : buildStatus(d.to<JsonObject>());
-        out = "#" + line + " ";
-        serializeJson(d, out);
+        serializeJson(d, out);  // ArduinoJson 7 replaces the String's contents, so prefix afterwards
+        out = "#" + line + " " + out;
         out += "\n";
     } else if (line.startsWith("{")) {
         JsonDocument in, ack;
@@ -602,8 +821,8 @@ void Logger::consoleLine(String line) {
             if (st != CmdStatus::Ok) ack["error"] = cmdStatusCode(st);
             if (message.length()) ack["message"] = message;
         }
-        out = "#ack ";
         serializeJson(ack, out);
+        out = "#ack " + out;
         out += "\n";
     } else {
         return;

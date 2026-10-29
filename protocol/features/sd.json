@@ -13,7 +13,9 @@
     "total_mb": { "type": "integer", "unit": "MB" },
     "write_errors": { "type": "integer" }
   },
-  "commands": {},
+  "commands": {
+    "self_test": { "args": {}, "description": "Writes a 64 KB test file, reads it back and verifies it, then checks the newest recording starts with the DLOG preamble. Safe while recording. Result: mounted, card_type, total_mb, free_mb, read_write_ok, write_kBps, read_kBps, log_files, newest, newest_bytes, newest_is_dlog, passed." }
+  },
   "streams": [],
   "events": {
     "sd_full": "Less than 1% free; recording stops.",

@@ -1,0 +1,18 @@
+# The fleet service and dashboard. setup.sh fills in @USER@, @VENV@ and @REPO@ and installs this as
+# /etc/systemd/system/logger-master.service.
+[Unit]
+Description=Logger master (fleet service and dashboard)
+After=network-online.target mosquitto.service
+Wants=network-online.target mosquitto.service
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@/master
+# LOGGER_MQTT_USER / LOGGER_MQTT_PASSWORD (kept out of the command line)
+EnvironmentFile=-/etc/logger-master.env
+ExecStart=@VENV@/bin/python -m logger_master serve --broker localhost --http-port 8080 --registry @REPO@/registry/devices.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

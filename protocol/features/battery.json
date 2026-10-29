@@ -2,19 +2,32 @@
   "feature": "battery",
   "version": 1,
   "multi_instance": false,
-  "description": "Battery level and charging state from a fuel gauge.",
+  "description": "Battery level and charging state from a fuel gauge (TinyS3[D]: onboard MAX17048). Optionally records a slow battery stream so a deployment's battery life is in the data file. Drives the power LED (docs/PLAN.md, Status LEDs).",
   "config": {
-    "low_warning_pct": { "type": "integer", "default": 15, "min": 0, "max": 100, "unit": "%" }
+    "medium_pct": { "type": "integer", "default": 70, "min": 0, "max": 100, "unit": "%", "description": "Below this: level medium (power LED single pulse)." },
+    "low_warning_pct": { "type": "integer", "default": 30, "min": 0, "max": 100, "unit": "%", "description": "Below this: level low (double pulse) and the battery_low event." },
+    "critical_pct": { "type": "integer", "default": 10, "min": 0, "max": 100, "unit": "%", "description": "Below this: level critical (fast flashes) and the battery_critical event." },
+    "log_interval_s": { "type": "number", "default": 10, "min": 0, "unit": "s", "applies": "new_file", "description": "How often to record the battery stream while recording; 0 = don't record it." }
   },
   "status": {
+    "present": { "type": "boolean", "description": "Fuel gauge found." },
     "voltage": { "type": "number", "unit": "V" },
     "percent": { "type": "number", "unit": "%" },
+    "level": { "type": "string", "enum": ["unknown", "high", "medium", "low", "critical"], "description": "Band from the thresholds above, with 3 % hysteresis." },
+    "charge_rate_pct_per_h": { "type": "number", "unit": "%/h", "description": "Positive while charging, negative while discharging." },
     "charging": { "type": "boolean" },
-    "usb_power": { "type": "boolean" }
+    "usb_power": { "type": "boolean" },
+    "gauge_resets": { "type": "integer", "description": "Re-estimates this boot (see gauge_reset); absent when none." },
+    "full": { "type": "boolean", "description": "On USB, at least 95 % and the charger has stopped (charge rate ~0) for a minute." }
   },
   "commands": {},
-  "streams": [],
+  "streams": [
+    { "name": "battery", "rate_hz": "1/{config.log_interval_s}",
+      "channels": [ { "name": "voltage", "unit": "V" }, { "name": "percent", "unit": "%" } ] }
+  ],
   "events": {
-    "battery_low": "Battery below low_warning_pct."
+    "battery_low": "Battery fell to level low while not on USB power. Once per discharge.",
+    "battery_critical": "Battery fell to level critical while not on USB power. Once per discharge.",
+    "gauge_reset": "The gauge's charge estimate disagreed with the battery voltage by 20+ points after 20 s on battery (typically it started up on the charger's voltage and believed the battery full), so it was told to re-estimate. Detail: percent_before, voltage, percent_from_voltage."
   }
 }

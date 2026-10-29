@@ -34,6 +34,10 @@ public:
 private:
     Logger* host_ = nullptr;
     bool autostart_ = true;
+    bool autostartWithMaster_ = false;  // false: the master decides when to record once it's connected
+    bool resuming_ = false;             // was recording before this boot: carry on regardless
+    const char* autostartState_ = "off";  // status.autostart
+    uint32_t masterWaitUntil_ = 0;        // countdown over, on the master's network, waiting for MQTT
     uint32_t startDelayS_ = 10;
     uint32_t flushIntervalS_ = 5;
     uint32_t fileMaxMinutes_ = 60;

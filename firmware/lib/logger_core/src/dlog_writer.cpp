@@ -83,7 +83,7 @@ void DlogWriter::begin(const char* metadataJson, size_t len) {
     uint8_t pre[16] = {};
     memcpy(pre, MAGIC, 8);
     putLe(pre + 8, 1, 2);   // version major
-    putLe(pre + 10, 0, 2);  // version minor
+    putLe(pre + 10, 1, 2);  // version minor
     put(pre, 16);
     record(REC_METADATA, reinterpret_cast<const uint8_t*>(metadataJson), len);
 }

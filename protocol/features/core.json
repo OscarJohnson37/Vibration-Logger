@@ -13,7 +13,7 @@
     "ntp_server": { "type": "string", "default": "", "description": "Empty: use the MQTT broker's host." },
     "ntp_interval_s": { "type": "integer", "default": 3600, "min": 60, "unit": "s" },
     "status_interval_s": { "type": "integer", "default": 30, "min": 5, "unit": "s" },
-    "led_brightness": { "type": "number", "default": 0.2, "min": 0, "max": 1, "description": "0 turns the status LED off." },
+    "led_brightness": { "type": "number", "default": 0.2, "min": 0, "max": 1, "description": "Brightness of the status and power LEDs; 0 turns them off." },
     "temp_warning_c": { "type": "number", "default": 55, "unit": "degC", "description": "Raise temp_high above this enclosure temperature." }
   },
   "status": {
@@ -23,7 +23,8 @@
       "source": { "type": "string", "enum": ["ntp", "manual", "gps"] },
       "last_sync_age_s": { "type": "integer", "unit": "s" }
     } },
-    "free_heap": { "type": "integer", "unit": "bytes" }
+    "free_heap": { "type": "integer", "unit": "bytes" },
+    "reset_reason": { "type": "string", "enum": ["power_on", "brownout", "software", "panic", "watchdog", "deep_sleep", "external", "unknown"], "description": "Why the logger last started: power_on (switched on / plugged in), software (reboot command or firmware update), brownout (supply dipped), panic / watchdog (a firmware fault)." }
   },
   "commands": {
     "identify": { "description": "Flash the status LED so this logger can be found.",

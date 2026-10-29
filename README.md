@@ -38,8 +38,10 @@ pio device monitor                    # serial output (open after the upload fin
 The vibration firmware's USB port carries binary DLOG data while recording, so use
 `python -m logger_reader capture` (see [master/](master/README.md)) rather than the monitor to
 record it. It also accepts bench commands typed into a serial terminal: `info`, `status`,
-`serial VL-0001` (set the unit's serial number) and MQTT-style commands such as
-`{"cmd":"identify"}` or `{"cmd":"stop"}`.
+`serial VL-0001` (set the unit's serial number), `wifi "<ssid>" <password>` (store the network
+to join, e.g. the master's hotspot; `wifi clear` forgets them; applies after a reboot) and
+MQTT-style commands such as `{"cmd":"identify"}`, `{"cmd":"start","args":{"session":"pump2-baseline"}}`
+or `{"cmd":"set_config","args":{"changes":{"core":{"name":"vib-01"}}}}`.
 
 The upload and monitor port is set in [firmware/platformio.ini](firmware/platformio.ini)
 (currently `COM22`); change it if Windows assigns the board a different COM number.

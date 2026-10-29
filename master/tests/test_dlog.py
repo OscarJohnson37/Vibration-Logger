@@ -88,7 +88,7 @@ def test_record_layout_matches_spec():
     assert struct.unpack_from("<I", rec, 4)[0] == 0
     import zlib
     assert struct.unpack_from("<I", rec, 8)[0] == zlib.crc32(rec[2:8])
-    assert dlog.encode_preamble() == b"\x89DLG\r\n\x1a\n\x01\x00\x00\x00\x00\x00\x00\x00"
+    assert dlog.encode_preamble() == b"\x89DLG\r\n\x1a\n\x01\x00\x01\x00\x00\x00\x00\x00"  # v1.1
 
 
 # ------------------------------------------------------------------ reading
