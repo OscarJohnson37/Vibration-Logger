@@ -103,6 +103,6 @@ devices:
     last_seen:
       firmware: 0.3.0-dev
       ip: 192.168.137.237
-      time: '2026-10-29T02:08:16+00:00'
+      time: '2026-10-29T02:09:16+00:00'
       battery_pct: 70.60938
       state: idle
