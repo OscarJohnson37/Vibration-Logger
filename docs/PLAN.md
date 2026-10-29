@@ -185,9 +185,11 @@ Three identifiers, from the design down to the chip:
   have `env` but doesn't"). Expected features come from the unit's own registry entry if set
   there, otherwise from its model's catalogue page; a logger of an unknown model falls back to
   what it reported on first contact.
-- **Storage:** start as a file in the repo (`registry/devices.yaml`): easy to edit by hand,
-  version history, fine for a handful of units. The master loads it; it can move into a
-  database later if the fleet grows.
+- **Storage:** a YAML file on the master (`registry/devices.yaml`, next to per-logger
+  orientation views and uploaded models in `registry/views/`): easy to edit by hand, fine for a
+  handful of units, and it can move into a database later if the fleet grows. It's site data,
+  so it's **git-ignored**, not committed: back it up on the master instead. The model catalogue
+  (`registry/models/`) is documentation and is in the repo.
 
 ## Network and connecting loggers
 
@@ -500,6 +502,7 @@ blocks them, because the sink interface and file format are designed for streami
    (default 10 s), no button; start/stop/config over WiFi (see Recording control).
 7. Which SD board is in hand for phase 2: the Adafruit 4682 (SDIO), or the generic adapter (SPI)
    for now? (Phase 2 proceeds with a USB sink until then.)
-8. ~~Registry location~~: decided: start as `registry/devices.yaml` in the repo.
+8. ~~Registry location~~: decided: `registry/devices.yaml` on the master, git-ignored (site
+   data stays out of the repo; the model catalogue `registry/models/` is in it).
 9. ~~Serial number scheme~~: decided: `VL-0001` (model family prefix + 4-digit number), with the
    model number `VL-P1` rev `A` (see Device identity).
