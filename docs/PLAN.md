@@ -314,20 +314,24 @@ Accuracy target: roughly a second is fine. The master is the time source.
 Loggers have a **power switch and status LEDs, but no button**. Recording is controlled by
 power-on behaviour, config and the network:
 
-- **Auto-start, unless the master is in control:** after power-on, the logger counts down and
-  then starts recording. Config `recording.autostart` (default `true`) and
-  `recording.start_delay_s` (default `10`). The delay lets you mount it and step away; a
-  `recording` start marker goes in the file regardless.
+- **No auto-start by default** (decided 2026-10-29): after power-on the logger is idle until
+  someone starts it, from the dashboard or from the logger's own hotspot page (phone, in the
+  field). Stray recordings were more trouble than a missed start. Config `recording.autostart`
+  (VL-P1 default `false`) turns auto-start back on, with `recording.start_delay_s` (default 10).
+- **Deliberate starts survive restarts:** a recording started by command (dashboard, page, USB)
+  is remembered in internal flash; after any restart (brownout, crash, firmware update, reboot)
+  it carries on after the start delay, in a new file in the same session, until a `stop`.
 - **Connected to the master: no auto-start.** If the logger is connected to the master, the
   master decides when to record, so the countdown is cancelled (event `autostart_skipped`,
   status `recording.autostart: "skipped_master"`) and recording waits for a `start` command.
   If WiFi has joined a network but MQTT isn't connected yet when the countdown ends, it waits up
   to 30 s more (`waiting_for_master`) before starting anyway. `recording.autostart_with_master`
-  (default `false`) restores auto-start even with the master connected. Away from the master
-  (in the field), auto-start works as before.
-- **Every power-on re-applies the config.** Stopping over WiFi only lasts until the next power
-  cycle, unless `autostart` has been turned off. A crash or brownout therefore resumes
-  recording by itself, in a new file (new `boot.id`).
+  (default `false`) restores auto-start even with the master connected. (Applies only when
+  `autostart` is on.)
+- **Battery saver:** `wifi` command `off_until_restart` (a button on the logger's page) turns
+  WiFi off completely until the next power-on, for long unattended recordings. While recording
+  it also happens by itself `wifi.auto_off_after_s` (default 60) after the last phone leaves
+  the logger's hotspot, so a field start is: join hotspot, Start, walk away.
 - **Remote control:** `start`, `stop` and `set_config` over WiFi, through either web interface
   (below), or over USB. On loggers with an SD card, config can also be edited in `config.json`
   on the card, no WiFi needed.
@@ -484,7 +488,7 @@ connected → roughly 1.5-3 days on 3000 mAh. Periodic WiFi instead of always-on
 | 3 | ADXL355 feature + SD sink on the Adafruit 4682 (**tested on hardware**: 4000 Hz, no gaps; SD 1-bit 20 MHz ~1 MB/s); config store in internal flash + `set_config` (**built**; SD `config.json` still to do); named sessions (**built**); serial number + WiFi provisioning over USB; registry file | The portable logger is usable |
 | 4 | Battery: power manager, fuel gauge (MAX17048 onboard), sleep/duty-cycle                                   | Portable logger is field-ready                 |
 | 5 | Master: Ubuntu PC hotspot, Mosquitto, mDNS, chrony (`deploy/ubuntu`); fleet service + dashboard (fleet view, control, sessions, config editor, registry, live plots, orientation) + simulator (**built**: `master/logger_master`, tested against the simulator); WiFi + MQTT status/commands + publications; NTP; logger-hosted web page | Remote control and monitoring |
-| 6 | `NetSink` + master stream receiver; Ethernet board support; OTA updates                                 | Streaming loggers                              |
+| 6 | `NetSink` + master stream receiver; Ethernet board support; OTA firmware updates over WiFi (`ota` feature; master side **built**: firmware store, Firmware page, fan-out, simulator) | Streaming loggers                              |
 | 7 | Second logger type                                                                                        | The abstraction actually works                 |
 
 Phases 2-4 deliver the portable vibration logger. Phases 5-6 can wait, but nothing in 2-4
@@ -497,9 +501,16 @@ blocks them, because the sink interface and file format are designed for streami
 3. Battery life target for the portable logger? Keeping WiFi connected most of the time costs
    power (roughly 20-100 mA), so this decides whether WiFi stays on or connects periodically.
 4. ~~Master AP~~: decided: the Ubuntu PC (master) runs the hotspot for now; a dedicated router later (see Network).
-5. Is OTA firmware update over the network wanted, or is USB flashing fine?
-6. ~~Start on power-up or wait for a command~~: decided: auto-start after a configurable delay
-   (default 10 s), no button; start/stop/config over WiFi (see Recording control).
+5. ~~OTA updates~~: decided: yes, driven from the master over WiFi (`ota` feature, MQTT.md
+   "Firmware updates"). The master stores images per model and version and sends `update`;
+   each logger downloads its image over HTTP from the master, checks size and SHA-256, writes
+   its spare app slot and reboots; new firmware must become healthy within
+   `ota.confirm_timeout_s` (default 300 s) or the logger rolls back. Refused while recording.
+   The logger's own page also takes an image, for the field; USB flashing stays the recovery
+   path.
+6. ~~Start on power-up or wait for a command~~: decided (revised 2026-10-29): wait for a
+   command (dashboard or the logger's hotspot page); deliberate starts survive restarts;
+   auto-start stays available as config (see Recording control).
 7. Which SD board is in hand for phase 2: the Adafruit 4682 (SDIO), or the generic adapter (SPI)
    for now? (Phase 2 proceeds with a USB sink until then.)
 8. ~~Registry location~~: decided: `registry/devices.yaml` on the master, git-ignored (site

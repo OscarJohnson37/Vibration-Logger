@@ -1,0 +1,28 @@
+{
+  "feature": "ota",
+  "version": 1,
+  "multi_instance": false,
+  "description": "Firmware updates over the network (MQTT.md, Firmware updates). The master stores images and sends update; the logger downloads it over HTTP from the master, checks size and SHA-256, writes it to its spare app slot and reboots into it. The new firmware must become healthy (sensors OK, connected to the master) within confirm_timeout_s, or the logger switches back to the previous firmware. Refused while recording.",
+  "config": {
+    "confirm_timeout_s": { "type": "integer", "default": 300, "min": 60, "unit": "s", "description": "How long new firmware has to become healthy before the logger rolls back to the previous firmware." }
+  },
+  "status": {
+    "state": { "type": "string", "enum": ["idle", "downloading", "verifying", "rebooting", "confirming", "failed"], "description": "failed: the last download or check failed; the old firmware kept running (see last_error)." },
+    "progress_pct": { "type": "integer", "min": 0, "max": 100, "description": "While downloading." },
+    "version": { "type": "string", "description": "Running firmware version (same as info.device.firmware)." },
+    "target_version": { "type": "string", "description": "Version being installed, while updating or confirming." },
+    "previous_version": { "type": "string", "description": "Version that ran before the last update." },
+    "confirm_s": { "type": "integer", "unit": "s", "description": "Seconds left for new firmware to become healthy, while confirming." },
+    "last_error": { "type": "string", "description": "Why the last update failed or was rolled back." }
+  },
+  "commands": {
+    "update": { "description": "Download and install firmware. Acks at once ({ accepted: true }); progress follows in status and events. busy while recording or while an update is running; invalid_args if arguments are missing or wrong, the model isn't this logger's, or the image is too big for the slot.", "args": { "path": { "type": "string", "description": "Path on the master's HTTP server, e.g. /firmware/VL-P1/0.4.0.bin. Fetched from the host this logger reached the MQTT broker at." }, "port": { "type": "integer", "default": 8080, "description": "The master's HTTP port." }, "url": { "type": "string", "description": "Full URL instead of path and port (optional)." }, "sha256": { "type": "string", "description": "64 lowercase hex digits." }, "size": { "type": "integer", "max": 3342336, "unit": "bytes" }, "version": { "type": "string" }, "model": { "type": "string", "description": "Must match this logger's model (info.device.model)." } } }
+  },
+  "streams": [],
+  "events": {
+    "update_started": "Download started. Detail: version.",
+    "update_failed": "Download or check failed; the old firmware keeps running and nothing changed. Detail: version, error.",
+    "update_installed": "New firmware became healthy after the reboot and is now permanent. Detail: version, previous_version.",
+    "update_rolled_back": "New firmware didn't become healthy in time (or kept crashing), so the logger switched back to the previous firmware and rebooted. Detail: version, previous_version, reason."
+  }
+}

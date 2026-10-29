@@ -13,7 +13,9 @@ secrets.*
 .pytest_cache/
 *.egg-info/
 
-# The master's runtime data: the device registry and per-logger views/uploaded models. Site data,
-# not source; it lives with the master (registry/models/, the model catalogue, is source).
+# The master's runtime data: the device registry, per-logger views/uploaded models and firmware
+# images for OTA updates. Site data, not source; it lives with the master (registry/models/, the
+# model catalogue, is source).
 registry/devices.yaml
 registry/views/
+registry/firmware/

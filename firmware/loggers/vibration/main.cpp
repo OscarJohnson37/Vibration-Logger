@@ -9,14 +9,18 @@
 #include <battery_max17048.h>
 #include <logger.h>
 #include <mqtt_link.h>
+#include <ota_feature.h>
 #include <publish_feature.h>
 #include <sd_card.h>
 #include <sim_accel.h>
 #include <wifi_feature.h>
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.3.0-dev"
+#define FIRMWARE_VERSION "0.4.2"
 #endif
+
+// Identifies this image for over-the-air updates: a logger only installs firmware for its own model
+static const char FIRMWARE_ID[] = "VLFW-MODEL=VL-P1;VLFW-VERSION=" FIRMWARE_VERSION ";";
 
 // TinyS3[D] pin map (docs/PLAN.md, Pin map). IO8/IO9 are the I2C bus (fuel gauge, BME280);
 // IO0 is the BOOT strap pin and stays free. IO1/IO2 drive the case LEDs; IO43/IO44 are spare.
@@ -29,10 +33,11 @@ static const int PIN_LED_POWER = 1;    // blue: battery and charging
 
 // This logger type's defaults; the config stored in internal flash (set_config, the USB wifi
 // command) goes on top. Sections are feature instances; fields follow protocol/features/*.json.
-// accel_1s feeds the master dashboard's plots and orientation view.
+// accel_1s feeds the master dashboard's plots and orientation view. No auto-start: recording is
+// started from the logger's page or the dashboard (and carries on through restarts until stopped).
 static const char* DEFAULT_CONFIG = R"json({
   "core":      { "led_brightness": 0.2 },
-  "recording": { "autostart": true, "start_delay_s": 10, "sinks": ["sd", "usb"] },
+  "recording": { "autostart": false, "start_delay_s": 10, "sinks": ["sd", "usb"] },
   "sd":        { "bus_width": 1, "freq_khz": 20000 },
   "accel":     { "range_g": 8, "odr_hz": 4000, "impl": { "spi_hz": 5000000 } },
   "wifi":      { "hotspot": "no_master" },
@@ -52,6 +57,7 @@ logger::BatteryMax17048 battery;  // onboard fuel gauge, I2C on IO8/IO9
 logger::WifiFeature wifi;
 logger::PublishFeature publish;
 logger::MqttLink mqtt(wifi);
+logger::OtaFeature ota(FIRMWARE_ID);
 logger::UsbSink usb;
 
 void setup() {
@@ -62,6 +68,8 @@ void setup() {
     app.add(accel);
     app.add(wifi);
     app.add(publish);
+    app.add(ota);
+    wifi.setOta(ota);
     app.addSink(sd);
     app.addSink(usb);
     app.setNet(mqtt);

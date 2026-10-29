@@ -20,12 +20,17 @@
     "trying": { "type": "string", "description": "Network being looked for, while not joined." },
     "hotspot": { "type": "string", "description": "The hotspot's name, while it's on." },
     "hotspot_ip": { "type": "string" },
-    "clients": { "type": "integer", "description": "Devices joined to the hotspot." }
+    "clients": { "type": "integer", "description": "Devices joined to the hotspot." },
+    "off_until_restart": { "type": "boolean", "description": "WiFi was switched off (off_until_restart, or auto_off_after_s while recording); it comes back at the next power-on." },
+    "master_search": { "type": "string", "enum": ["stopped_until_restart"], "description": "Present when recording was started from the logger's own page: it no longer looks for the master until the next power-on." }
   },
-  "commands": {},
+  "commands": {
+    "off_until_restart": { "description": "Turn WiFi off completely (no hotspot, no looking for the master) to save battery, e.g. after starting a recording in the field. Not stored: switching the logger off and on brings WiFi back as configured. Also a button on the logger's page.", "args": {} }
+  },
   "streams": [],
   "events": {
     "wifi_connected": "Joined a network.",
-    "wifi_lost": "Lost the network."
+    "wifi_lost": "Lost the network.",
+    "wifi_off": "WiFi is switching off until the next power-on: off_until_restart, or by itself while recording once the hotspot is unused (detail.reason)."
   }
 }

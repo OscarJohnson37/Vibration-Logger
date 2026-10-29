@@ -12,6 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .firmware import MAX_IMAGE_BYTES, FirmwareStore
 from .fleet import Fleet
 from .models import Models
 from .views import MAX_MODEL_BYTES, ViewStore
@@ -19,7 +20,8 @@ from .views import MAX_MODEL_BYTES, ViewStore
 STATIC = Path(__file__).parent / "static"
 
 
-def create_app(fleet: Fleet, views: ViewStore | None = None, models: Models | None = None) -> FastAPI:
+def create_app(fleet: Fleet, views: ViewStore | None = None, models: Models | None = None,
+               firmware: FirmwareStore | None = None, http_port: int = 8080) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await fleet.start()
@@ -140,6 +142,61 @@ def create_app(fleet: Fleet, views: ViewStore | None = None, models: Models | No
     async def model_delete(dev_id: str):
         try:
             return _views().delete_model(dev_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    # ------------------------------------------------------------ firmware (OTA updates)
+
+    def _firmware() -> FirmwareStore:
+        if not firmware:
+            raise HTTPException(400, "no firmware storage configured")
+        return firmware
+
+    @app.get("/api/firmware")
+    async def firmware_list():
+        return _firmware().list()
+
+    @app.put("/api/firmware")
+    async def firmware_upload(model: str, version: str, request: Request, filename: str = "", notes: str = ""):
+        data = await request.body()
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, f"image larger than the OTA slot ({MAX_IMAGE_BYTES} bytes)")
+        try:
+            return _firmware().save(model, version, data, filename, notes)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/api/firmware/{model}/{version}")
+    async def firmware_delete(model: str, version: str):
+        try:
+            if not _firmware().delete(model, version):
+                raise HTTPException(404, "no such image")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"deleted": f"{model}/{version}"}
+
+    # What loggers download (the `update` command's path). A plain file with Content-Length: the
+    # logger checks the size and SHA-256 before switching to it.
+    @app.get("/firmware/{model}/{version}.bin")
+    async def firmware_image(model: str, version: str):
+        try:
+            path = _firmware().path(model, version)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not path:
+            raise HTTPException(404, "no such image")
+        return FileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/update")
+    async def update(body: dict = Body(...)):
+        try:
+            image = _firmware().get(body.get("model", ""), body.get("version", ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not image:
+            raise HTTPException(404, "no such firmware image on the master")
+        try:
+            return await fleet.update(body.get("selection") or {}, image, http_port, float(body.get("timeout", 8)))
         except ValueError as e:
             raise HTTPException(400, str(e))
 

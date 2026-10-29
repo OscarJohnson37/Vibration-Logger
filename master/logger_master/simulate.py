@@ -6,23 +6,32 @@ accel_1s stats publication every second whether or not it's recording (a slowly 
 vector plus vibration), and a battery that drains. Like the real logger, it doesn't auto-start
 while connected to the master (unless recording.autostart_with_master is set): the countdown is
 cancelled and it waits for a start command.
+
+OTA updates (protocol/features/ota.json) are simulated end to end: `update` really downloads the
+image from the master over HTTP and checks its size and SHA-256, then "reboots" into the new
+version and confirms it. A version containing "bad" never becomes healthy, so it rolls back.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
 import re
 import threading
 import time
+import urllib.request
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
 from .features import Features
 
-FW = "sim-0.4.0"
+FW = "0.3.0"                  # simulated firmware version before any OTA update
+MODEL = "VL-P1"
+MAX_IMAGE_BYTES = 3342336
+SIM_CONFIRM_S = 8             # simulated "healthy" check after an update (the real one waits for MQTT)
 SESSION_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -52,6 +61,7 @@ class SimLogger:
             "publish": {"budget_kbps": 32, "publications": [
                 {"name": "accel_1s", "stream": "accel", "method": "stats",
                  "params": {"stats": ["mean", "ac_rms", "peak"]}, "interval_s": 1}]},
+            "ota": {"confirm_timeout_s": 300},
         }
         self.synced = index != 1            # one logger starts with an unset clock
         self.sync_ms = time.time() * 1000
@@ -68,6 +78,10 @@ class SimLogger:
         self.frames = 0
         self.sent = 0
         self.tilt_phase = self.rng.uniform(0, 6.28)
+
+        self.broker, self.port = broker, port
+        self.firmware = FW
+        self.ota = {"state": "idle"}
 
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"logger-{self.id}")
         self.client.will_set(self.topic("status"), json.dumps({"v": 1, "state": "offline"}), qos=1, retain=True)
@@ -126,6 +140,7 @@ class SimLogger:
             {"instance": "accel", "feature": "accel", "version": 1, "impl": "sim",
              "limits": {"range_g": [2, 4, 8], "odr_hz": [125, 250, 500, 1000, 2000, 4000]}},
             {"instance": "publish", "feature": "publish", "version": 1, "methods": ["latest", "mean", "stats"]},
+            {"instance": "ota", "feature": "ota", "version": 1},
         ]
         rate = self.config["accel"]["odr_hz"]
         scale = self.config["accel"]["range_g"] / 512000
@@ -133,7 +148,7 @@ class SimLogger:
             "v": 1,
             "device": {"id": self.id, "serial": self.serial, "name": self.config["core"]["name"],
                        "type": "vibration", "model": "VL-P1", "hardware_rev": "A",
-                       "hardware": "simulator", "firmware": FW},
+                       "hardware": "simulator", "firmware": self.firmware},
             "features": feats,
             "streams": [{"id": 1, "name": "accel", "feature": "accel", "rate_hz": rate, "dtype": "i24",
                          "raw_min": -524288, "raw_max": 524287,
@@ -183,8 +198,16 @@ class SimLogger:
                 "accel": {"ok": True, "frames": self.frames, "gaps": 0, "fifo_overflows": 0,
                           "clipped_blocks": 0, "errors": 0, "resets": 0, "temperature_c": 26.5},
                 "publish": {"publications": [{"name": "accel_1s", "sent": self.sent, "skipped": 0}]},
+                "ota": self.ota_status(),
             },
         }
+
+    def ota_status(self) -> dict:
+        o = {k: v for k, v in self.ota.items() if not k.startswith("_")}
+        o["version"] = self.firmware
+        if o["state"] == "confirming":
+            o["confirm_s"] = max(0, int(self.ota["_confirm_until"] - time.monotonic()))
+        return o
 
     def session_dir(self) -> str:
         return session_slug(self.session) if self.session else "unnamed"
@@ -247,7 +270,7 @@ class SimLogger:
     def command(self, cmd: str, target: str | None, args: dict):
         owners = {"identify": "core", "mark": "core", "get_config": "core", "set_config": "core",
                   "sync_time": "core", "set_time": "core", "reboot": "core", "start": "recording",
-                  "stop": "recording", "roll_file": "recording", "publish": "publish"}
+                  "stop": "recording", "roll_file": "recording", "publish": "publish", "update": "ota"}
         self_tests = ["accel", "sd"]
         if cmd == "self_test":
             if target is None:
@@ -312,6 +335,8 @@ class SimLogger:
             self.files_this_boot += 1
             self.event("file_rolled", "recording", {"file": self.file_name()})
             return True, {"file": self.file_name()}, "", ""
+        if cmd == "update":
+            return self.start_update(args)
         if cmd == "self_test" and target == "accel":
             if self.recording:
                 return False, {}, "busy", "stop recording first"
@@ -322,6 +347,82 @@ class SimLogger:
                           "total_mb": 29808, "free_mb": 29500, "read_write_ok": True, "write_kBps": 950.0,
                           "read_kBps": 1480.0, "log_files": self.files_this_boot, "passed": True}, "", ""
         return False, {}, "unsupported", f"'{cmd}' not simulated"
+
+    # ------------------------------------------------------------ OTA
+
+    def start_update(self, args: dict):
+        if self.recording:
+            return False, {}, "busy", "recording: stop it first"
+        if self.ota["state"] in ("downloading", "verifying", "rebooting", "confirming"):
+            return False, {}, "busy", f"an update is already {self.ota['state']}"
+        version, sha, size = str(args.get("version", "")), str(args.get("sha256", "")), args.get("size")
+        if not version or not (args.get("path") or args.get("url")):
+            return False, {}, "invalid_args", "version and path (or url) are required"
+        if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+            return False, {}, "invalid_args", "sha256 must be 64 lowercase hex digits"
+        if not isinstance(size, int) or not 0 < size <= MAX_IMAGE_BYTES:
+            return False, {}, "invalid_args", f"size must be 1-{MAX_IMAGE_BYTES} bytes"
+        if args.get("model") != MODEL:
+            return False, {}, "invalid_args", f"firmware is for {args.get('model')}, this logger is {MODEL}"
+        # Like the firmware: the master's address is the host this logger reached the broker at
+        url = args.get("url") or f"http://{self.broker}:{int(args.get('port', 8080))}{args['path']}"
+        self.ota = {"state": "downloading", "progress_pct": 0, "target_version": version}
+        self.event("update_started", "ota", {"version": version})
+        threading.Thread(target=self._download, args=(url, version, sha, size), daemon=True).start()
+        return True, {"accepted": True}, "", ""
+
+    def _download(self, url: str, version: str, sha: str, size: int):
+        h, got = hashlib.sha256(), 0
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                length = int(r.headers.get("Content-Length") or 0)
+                if length != size:
+                    raise ValueError(f"server sent {length} bytes, expected {size}")
+                while True:
+                    chunk = r.read(max(4096, size // 20))
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    got += len(chunk)
+                    with self.lock:
+                        self.ota["progress_pct"] = int(100 * got / size)
+                        self.publish_status()
+                    time.sleep(0.4)               # spread over a few seconds, like a real logger
+            with self.lock:
+                self.ota = {"state": "verifying", "target_version": version}
+                self.publish_status()
+            time.sleep(0.5)
+            if got != size or h.hexdigest() != sha:
+                raise ValueError("checksum mismatch")
+        except Exception as e:
+            with self.lock:
+                self.ota = {"state": "failed", "last_error": str(e)}
+                self.event("update_failed", "ota", {"version": version, "error": str(e)})
+                self.publish_status()
+            return
+        with self.lock:
+            self.ota = {"state": "rebooting", "target_version": version}
+            self.publish_status()
+        time.sleep(1)
+        previous = self.firmware
+        self.firmware = version
+        self.ota = {"state": "confirming", "target_version": version, "previous_version": previous,
+                    "_confirm_until": time.monotonic() + SIM_CONFIRM_S}
+        self.reboot()
+        time.sleep(SIM_CONFIRM_S)
+        if "bad" in version:                      # never got healthy: back to the old firmware
+            self.firmware = previous
+            self.ota = {"state": "idle", "previous_version": version,
+                        "last_error": "new firmware didn't become healthy; rolled back"}
+            self.reboot()
+            with self.lock:
+                self.event("update_rolled_back", "ota", {"version": version, "previous_version": previous,
+                                                         "reason": "not healthy within confirm_timeout_s"})
+            return
+        with self.lock:
+            self.ota = {"state": "idle", "previous_version": previous}
+            self.event("update_installed", "ota", {"version": version, "previous_version": previous})
+            self.publish_status()
 
     def gravity(self, t: float) -> list[float]:
         """A slowly tilting board: gravity mostly on z, rocking about x and y."""

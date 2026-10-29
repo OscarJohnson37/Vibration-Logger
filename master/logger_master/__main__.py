@@ -20,17 +20,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     from .features import Features
+    from .firmware import FirmwareStore
     from .fleet import Fleet
     from .models import Models
     from .registry import Registry
     from .views import ViewStore
     from .web import create_app
 
-    # The model catalogue, orientation views and 3D models live next to the registry
+    # The model catalogue, orientation views, 3D models and firmware images live next to the registry
     models = Models(args.registry.parent / "models")
     fleet = Fleet(args.broker, args.mqtt_port, username=args.mqtt_user, password=args.mqtt_password,
                   registry=Registry(args.registry, models=models), features=Features(args.features))
-    app = create_app(fleet, ViewStore(args.registry.parent / "views"), models)
+    app = create_app(fleet, ViewStore(args.registry.parent / "views"), models,
+                     FirmwareStore(args.registry.parent / "firmware"), args.http_port)
     print(f"dashboard: http://{'localhost' if args.host in ('0.0.0.0', '') else args.host}:{args.http_port}  "
           f"(broker {args.broker}:{args.mqtt_port}, registry {args.registry})")
     uvicorn.run(app, host=args.host, port=args.http_port, log_level="warning")

@@ -4,12 +4,18 @@
 #include <WiFi.h>
 #include <logger.h>
 
+#include "icons.h"
+#include "ota_feature.h"
+
 namespace logger {
 
 // The status page. Everything it shows comes from /status, so it stays in step with MQTT status.
 static const char PAGE[] PROGMEM = R"html(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Logger status</title>
+<link rel="icon" type="image/png" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#1f488c">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Logger">
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--text:#1c2330;--muted:#677184;--border:#dde1e8;--ok:#1f9d55;--warn:#c27c0e;--err:#d64545}
 @media (prefers-color-scheme:dark){:root{--bg:#11141a;--card:#1a1f28;--text:#e6e9ef;--muted:#8b93a3;--border:#2b323e;--ok:#3dd68c;--warn:#f5a524;--err:#ff6369}}
@@ -38,6 +44,24 @@ Pause closes the file; Start carries on in the same session.</p>
 </div>
 <p class="hint" id="recMaster" hidden>The master is connected and controls recording. Use its dashboard.</p>
 <p class="hint" id="recMsg"></p>
+</div>
+<div class="card" id="fwCard" hidden><h2>Firmware</h2><dl id="fw"></dl>
+<div id="fwControls">
+<label for="fwFile">Firmware file (.bin, from <code>pio run -e vibration</code>)</label><input id="fwFile" type="file" accept=".bin">
+<button class="primary" id="fwUpload" type="button">Upload &amp; install</button>
+<div class="bar" style="margin-top:10px"><i id="fwBar" style="width:0"></i></div>
+<p class="hint">The logger checks the file is for this model, installs it, and restarts. If the new firmware
+doesn't keep running for a minute it switches back by itself. Not while recording.</p>
+</div>
+<p class="hint" id="fwMaster" hidden>The master is connected: update from its dashboard.</p>
+<p class="hint" id="fwMsg"></p>
+</div>
+<div class="card"><h2>Battery saver</h2>
+<p class="hint" style="margin-top:0">Turns WiFi off completely: no hotspot, and no looking for the master. Recording
+carries on, and the battery lasts much longer. To get WiFi back, switch the logger off and on.
+<b>While recording this happens by itself a minute after you disconnect from this hotspot.</b></p>
+<button id="radioOff" type="button">Turn WiFi off until restart</button>
+<p class="hint" id="radioMsg"></p>
 </div>
 <div class="card"><h2>Network</h2>
 <p class="hint" id="nets">Known networks: …</p>
@@ -80,6 +104,10 @@ async function tick(){
     rows($("rec"),[["State",rec.recording?"recording":"paused / stopped",rec.recording?"ok":""],["Session",rec.session||"–"],
       ["File",rec.file||"–"],["Auto-start",auto+(rec.countdown_s?" ("+rec.countdown_s+" s)":"")]]);
     $("recControls").hidden=!!w.master;$("recMaster").hidden=!w.master;
+    const o=f.ota;$("fwCard").hidden=!o;
+    if(o){const st={idle:"up to date",downloading:"installing "+(o.progress_pct||0)+"%",verifying:"checking",rebooting:"restarting",confirming:"new firmware, confirming ("+o.confirm_s+" s left)",failed:"last update failed"}[o.state]||o.state;
+      rows($("fw"),[["Version",o.version||"–"],["Update",st,o.state==="failed"?"err":""]].concat(o.last_error?[["Last error",o.last_error,"err"]]:[]).concat(o.previous_version?[["Previous",o.previous_version]]:[]));
+      $("fwControls").hidden=!!w.master;$("fwMaster").hidden=!w.master;}
     if(!$("session").value&&rec.session&&document.activeElement!==$("session"))$("session").placeholder=rec.session;
   }catch(e){}
   $("age").textContent=last?"Updated "+Math.round((Date.now()-last)/1000)+" s ago":"Connecting…";
@@ -99,6 +127,19 @@ async function rec(action){
   try{const r=await fetch("/recording",{method:"POST",body:new URLSearchParams(body)});$("recMsg").textContent=await r.text();
     if(r.ok)$("session").value="";tick();}catch(e){$("recMsg").textContent="No reply from the logger."}
 }
+$("fwUpload").onclick=()=>{
+  const file=$("fwFile").files[0];if(!file){$("fwMsg").textContent="Choose a .bin file first.";return}
+  if(!confirm("Install "+file.name+"? The logger restarts afterwards."))return;
+  const x=new XMLHttpRequest(),fd=new FormData();fd.append("firmware",file,file.name);
+  x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded*100/e.total);$("fwBar").style.width=p+"%";$("fwMsg").textContent="Uploading "+p+"%"}};
+  x.onload=()=>{$("fwMsg").textContent=x.responseText};x.onerror=()=>{$("fwMsg").textContent="Upload finished; the logger is restarting. Reconnect in about 30 s."};
+  x.open("POST","/update");x.send(fd);
+};
+$("radioOff").onclick=async()=>{
+  if(!confirm("Turn WiFi off? This page and the master lose the logger until it's switched off and on."))return;
+  try{const r=await fetch("/wifi/off",{method:"POST"});$("radioMsg").textContent=await r.text();}
+  catch(e){$("radioMsg").textContent="WiFi is off."}
+};
 $("recStart").onclick=()=>rec("start");$("recStop").onclick=()=>rec("stop");
 $("netForm").onsubmit=e=>{e.preventDefault();post({ssid:$("ssid").value,password:$("password").value,mqtt_host:$("mqtt").value})};
 $("forget").onclick=()=>{if(confirm("Forget all networks? The logger will only run its own hotspot."))post({clear:"1"})};
@@ -117,6 +158,7 @@ bool WifiFeature::begin(Logger& host, JsonObjectConst config) {
                    : !strcmp(hotspot, "no_network") ? "no_network"
                                                     : "no_master";
     hotspotPassword_ = config["hotspot_password"] | "";
+    autoOffAfterMs_ = uint32_t(max(0, int(config["auto_off_after_s"] | 60))) * 1000;
     for (JsonObjectConst n : config["networks"].as<JsonArrayConst>()) {
         const char* ssid = n["ssid"] | "";
         if (!*ssid || nNetworks_ >= MAX_NETWORKS) continue;
@@ -147,6 +189,14 @@ bool WifiFeature::begin(Logger& host, JsonObjectConst config) {
     server_.on("/networks", HTTP_GET, [this] { sendNetworks(); });
     server_.on("/networks", HTTP_POST, [this] { saveNetwork(); });
     server_.on("/recording", HTTP_POST, [this] { recordingAction(); });
+    server_.on("/update", HTTP_POST, [this] { firmwareUploadDone(); }, [this] { firmwareUpload(); });
+    server_.on("/wifi/off", HTTP_POST, [this] {
+        JsonDocument args, result;
+        String message;
+        command("off_until_restart", args.as<JsonObjectConst>(), result.to<JsonObject>(), message);
+        server_.send(200, "text/plain", "WiFi turns off in a moment. Switch the logger off and on to get it back.");
+    });
+    serveIcons();
     masterSeen_ = millis();
     server_.onNotFound([this] { server_.send(404, "text/plain", "not found"); });
     server_.begin();
@@ -227,6 +277,15 @@ void WifiFeature::saveNetwork() {
     rebootAt_ = millis() + 1500;  // let the reply go out first
 }
 
+// Started from this page, so the logger is working without the master: stop looking for it
+// (saves the power of scanning) until the next power-on. The hotspot stays for now.
+void WifiFeature::stopStationSearch() {
+    if (stationStopped_ || !nNetworks_) return;
+    stationStopped_ = true;
+    WiFi.disconnect(false);
+    if (hotspotOn_) WiFi.mode(WIFI_AP);
+}
+
 bool WifiFeature::masterConnected() const {
     return host_->net() && host_->net()->connected();
 }
@@ -250,18 +309,118 @@ void WifiFeature::recordingAction() {
         server_.send(500, "text/plain", "Couldn't " + action + ": " + message);
         return;
     }
-    server_.send(200, "text/plain", action == "stop" ? "Paused." : "Recording in session " + host_->session() + ".");
+    if (action == "start") stopStationSearch();
+    server_.send(200, "text/plain", action == "stop" ? "Paused."
+        : "Recording in session " + host_->session() + ". Working without the master now; WiFi switches off a minute after you disconnect.");
+}
+
+void WifiFeature::serveIcons() {
+    auto png = [this](const char* path, const uint8_t* data, size_t len) {
+        server_.on(path, HTTP_GET, [this, data, len] {
+            server_.sendHeader("Cache-Control", "max-age=604800");
+            server_.send_P(200, "image/png", reinterpret_cast<const char*>(data), len);
+        });
+    };
+    png("/icon-180.png", ICON_180, sizeof(ICON_180));
+    png("/icon-192.png", ICON_192, sizeof(ICON_192));
+    png("/icon-512.png", ICON_512, sizeof(ICON_512));
+    png("/favicon.ico", ICON_192, sizeof(ICON_192));
+    server_.on("/manifest.json", HTTP_GET, [this] {
+        JsonDocument d;
+        d["name"] = "Logger " + ssid_;
+        d["short_name"] = "Logger";
+        d["start_url"] = "/";
+        d["display"] = "standalone";
+        d["background_color"] = "#11141a";
+        d["theme_color"] = "#1f488c";
+        JsonArray icons = d["icons"].to<JsonArray>();
+        for (int s : {192, 512}) {
+            JsonObject i = icons.add<JsonObject>();
+            i["src"] = "/icon-" + String(s) + ".png";
+            i["sizes"] = String(s) + "x" + String(s);
+            i["type"] = "image/png";
+        }
+        String out;
+        serializeJson(d, out);
+        server_.send(200, "application/manifest+json", out);
+    });
+}
+
+CmdStatus WifiFeature::command(const char* cmd, JsonObjectConst, JsonObject result, String& message) {
+    if (strcmp(cmd, "off_until_restart") != 0) return CmdStatus::Unsupported;
+    if (!enabled_) {
+        message = "WiFi is already off";
+        return CmdStatus::Failed;
+    }
+    host_->event("wifi_off", instance());
+    radioOffAt_ = millis() + 1500;  // let the reply / ack go out first
+    result["off_in_s"] = 1.5;
+    return CmdStatus::Ok;
+}
+
+// Off until the next power-on: nothing is stored, so a restart brings WiFi back as configured
+void WifiFeature::radioOff() {
+    radioOffAt_ = 0;
+    radioOff_ = true;
+    enabled_ = false;
+    MDNS.end();
+    server_.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    hotspotOn_ = false;
+}
+
+// Streams the uploaded file straight into the spare firmware slot (OtaFeature checks and installs it)
+void WifiFeature::firmwareUpload() {
+    HTTPUpload& up = server_.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        uploadError_ = "";
+        uploadOk_ = false;
+        if (!ota_) uploadError_ = "firmware updates aren't enabled on this logger";
+        else if (masterConnected()) uploadError_ = "the master is connected: update from its dashboard";
+        else if (!ota_->uploadBegin(uploadError_)) {}
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (uploadError_.isEmpty() && !ota_->uploadWrite(up.buf, up.currentSize)) uploadError_ = "writing failed";
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (uploadError_.isEmpty()) uploadOk_ = ota_->uploadEnd(uploadError_);
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        if (ota_) ota_->uploadAbort();
+        uploadError_ = "upload interrupted";
+    }
+}
+
+void WifiFeature::firmwareUploadDone() {
+    if (uploadOk_) server_.send(200, "text/plain", "Installed. The logger is restarting into the new firmware; reconnect in about 30 s.");
+    else server_.send(400, "text/plain", "Not installed: " + (uploadError_.isEmpty() ? String("no file") : uploadError_));
 }
 
 void WifiFeature::poll() {
+    if (radioOffAt_ && int32_t(millis() - radioOffAt_) >= 0) radioOff();
     if (!enabled_) return;
+
+    // Recording on its own (no master), and the last phone has left the logger's hotspot: switch
+    // WiFi off to save the battery. Never while the master is connected.
+    if (hotspotOn_ && autoOffAfterMs_ && !masterConnected() && millis() - lastClientCheck_ >= 1000) {
+        lastClientCheck_ = millis();
+        if (WiFi.softAPgetStationNum() > 0) {
+            hadClient_ = true;
+            lastClientMs_ = millis();
+        } else if (hadClient_ && host_->recording() && !radioOffAt_ && millis() - lastClientMs_ >= autoOffAfterMs_) {
+            JsonDocument d;
+            d["reason"] = "recording; hotspot unused";
+            host_->event("wifi_off", instance(), d.as<JsonObjectConst>());
+            radioOff();
+            return;
+        }
+    }
     server_.handleClient();
     if (rebootAt_ && int32_t(millis() - rebootAt_) >= 0) {
         host_->stopRecording("reboot");  // closes the file cleanly
         delay(200);
         ESP.restart();
     }
-    if (!nNetworks_) return;
+    if (!nNetworks_ || stationStopped_) return;
 
     const bool connected = WiFi.status() == WL_CONNECTED;
     if (connected && !wasConnected_) {
@@ -300,8 +459,10 @@ void WifiFeature::status(JsonObject out) const {
     if (!enabled_) {
         out["mode"] = "off";
         out["connected"] = false;
+        if (radioOff_) out["off_until_restart"] = true;
         return;
     }
+    if (stationStopped_) out["master_search"] = "stopped_until_restart";
     const bool connected = stationConnected();
     out["mode"] = connected ? "station" : hotspotOn_ ? "hotspot" : "station";
     out["connected"] = connected;

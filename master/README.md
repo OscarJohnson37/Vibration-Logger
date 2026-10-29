@@ -54,12 +54,44 @@ What it does:
   entry lists its own. Pages are re-read when edited. `GET /api/models`, `/api/models/<model>`.
 - Live data and orientation come from the loggers' MQTT publications (e.g. `accel_1s`), which
   the vibration logger sends whether or not it's recording.
+- A **Firmware** page (header button) updates loggers over WiFi; see below.
 - It works with no internet: everything it needs (including three.js) is served locally.
 
 REST API (used by the dashboard): `GET /api/fleet`, `GET /api/loggers/{id}`,
 `POST /api/command` `{selection: {ids|group|all, type?, feature?}, cmd, target?, args?}`,
 `POST /api/loggers/{id}/config` `{changes}`, `PUT /api/registry/{id}`,
 `POST /api/time/loggers` `{selection}`, `GET /api/features`, and `/ws` for live updates.
+
+## Firmware updates (OTA)
+
+The **Firmware** page installs new firmware over WiFi (`ota` feature,
+[protocol/MQTT.md](../protocol/MQTT.md) "Firmware updates"):
+
+1. Build it: `pio run -e vibration` in `firmware/`, which makes
+   `firmware/.pio/build/vibration/firmware.bin`.
+2. **Upload firmware** on the Firmware page. Model and version are read from the image's
+   marker (`VLFW-MODEL=VL-P1;VLFW-VERSION=0.4.0;`) when it has one. The master checks it's an
+   ESP32 app image, fits an OTA slot (3342336 bytes) and is for that model, then keeps it in
+   `registry/firmware/<model>/<version>.bin` (git-ignored, like the rest of `registry/` except
+   the model catalogue).
+3. Each model has a table of its loggers with their firmware version and update state. Tick
+   loggers and press **Update selected**, or **Update all**. The master sends `update` only
+   to loggers of that model that support OTA and aren't already on that version, and reports
+   one combined result ("update to 0.4.0: 2 of 3 accepted; VL-0003 busy: recording …;
+   VL-0004 already on 0.4.0").
+4. Each logger downloads the image from the master (`GET /firmware/<model>/<version>.bin`),
+   checks its size and SHA-256, restarts into it, and has `ota.confirm_timeout_s` (default
+   5 min) to become healthy, or it switches back to its old firmware by itself. Progress shows
+   on the fleet cards and the Firmware page; the outcome is in the logger's Events
+   (`update_installed`, `update_rolled_back`, `update_failed`).
+
+Loggers that are recording refuse: stop them first. Firmware without the `ota` feature (older
+than 0.4.0) needs one USB update first. API: `GET/PUT /api/firmware` (upload: raw body,
+`?model=&version=&filename=&notes=`), `DELETE /api/firmware/{model}/{version}`,
+`POST /api/update` `{selection, model, version}`.
+
+In the simulator, `update` really downloads and checks the image; a version containing `bad`
+never becomes healthy, to show a rollback.
 
 ## Developing without hardware
 

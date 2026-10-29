@@ -80,7 +80,7 @@ CmdStatus CoreFeature::command(const char* cmd, JsonObjectConst args, JsonObject
         return CmdStatus::Ok;
     }
     if (!strcmp(cmd, "reboot")) {
-        rebootAt_ = millis() + 500;  // give the ack time to go out
+        rebootAt_ = millis() + 2000;  // give the ack (and the status after it) time to reach the master
         return CmdStatus::Ok;
     }
     return CmdStatus::Unsupported;

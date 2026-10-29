@@ -40,7 +40,7 @@ LEDs run at 20% brightness by default (`core.led_brightness`).
 
 | Pattern | Meaning |
 |---|---|
-| Blinking once a second, then fast (4 per second) for the last 3 s | Counting down to auto-start (10 s after power-on by default) |
+| Blinking once a second, then fast (4 per second) for the last 3 s | Counting down to start: carrying on after a restart (10 s), or auto-start if it's been turned on |
 | One short flash every 3 s | **Recording** |
 | Two short flashes every 3 s | Recording and connected to the master |
 | Slow breathing (4 s) | Idle: powered and healthy, not recording |
@@ -68,15 +68,17 @@ LEDs run at 20% brightness by default (`core.led_brightness`).
 
 ### Powering on
 
-1. Switch it on. The green LED counts down for 10 s.
-2. **Away from the master** (in the field): it starts recording when the countdown ends. Green
-   then flashes once every 3 s.
-3. **Connected to the master:** it does **not** start by itself. The master is in control:
-   start it from the dashboard. (If it's still connecting when the countdown ends, it waits up to
-   30 s to see whether the master appears, then starts anyway.)
+1. Switch it on. It does **not** start recording by itself: green breathes slowly (idle).
+2. **Start it:** from the master dashboard, or away from the master from your phone on the
+   logger's own hotspot page (below). Green then flashes once every 3 s (twice with the master
+   connected).
+3. **Restarts carry on:** once started, a recording continues after any restart (a power
+   glitch, a firmware update, a reboot) — after a 10 s countdown, in a new file in the same
+   session — until someone presses **Stop**. Switching off while recording loses at most the
+   last 5 s.
 
-Every power-on behaves the same way, so a logger that reboots in the field carries on recording
-in a new file. Switching off while recording loses at most the last 5 s.
+(Auto-start after power-on can be turned back on with `recording.autostart`; it's skipped when
+the master is connected.)
 
 ### Naming a session, pausing (from a phone, away from the master)
 
@@ -91,7 +93,17 @@ recording so the files aren't filed under `unnamed` or a date.
    recording moves into the new session (new file). **Pause** stops recording until you press
    Start again or the logger is switched off and on.
 
-The session name is remembered, so after a reboot the auto-start carries on in the same session.
+The session name is remembered, so after a restart the recording carries on in the same session.
+
+Starting from this page tells the logger you're working without the master: it stops looking
+for one until it's switched off and on. To make the battery last, WiFi switches off by itself **a
+minute after you disconnect from the hotspot while it's recording** (or press **Turn WiFi off until restart** straight away): the
+hotspot and the search for the master switch off and recording carries on. Reconnecting within
+the minute cancels it. Switch the logger off and on to get WiFi back.
+
+**Home-screen icon:** with the page open, *Share → Add to Home Screen* (iPhone) or *⋮ → Add to
+Home screen* (Android). It works for any logger, since every logger's hotspot page is at
+192.168.4.1.
 The recording controls only appear while the logger isn't connected to the master.
 
 ### With the master
@@ -156,6 +168,27 @@ or in code with `logger_reader.read_session(...)` / `find_sessions(...)` (see ma
 6. Check: insert a card, run **SD self-test** and **Accelerometer self-test** from the
    dashboard's Control tab.
 
+## Firmware updates
+
+Firmware 0.4.0 and later updates over WiFi from the master:
+
+1. On the dashboard, open **Firmware** (top right) and upload the new `firmware.bin` (built
+   with `pio run -e vibration`; model and version fill in from the file).
+2. Stop any logger you want to update: it refuses while recording.
+3. Tick the loggers (or **Update all VL-P1**) and confirm.
+4. Each logger downloads the image (progress on its card), restarts, and comes back on the new
+   version. It's offline for a few seconds while it restarts.
+5. It then has 5 minutes (`ota.confirm_timeout_s`) to prove the new firmware works: sensors OK
+   and back on the master. If not, it switches back to the previous firmware by itself; the
+   dashboard shows **rolled back** in its Events and the card, and it carries on as before.
+
+A failed download changes nothing: the old firmware keeps running. Away from the master, the
+logger's own page (hotspot `VL-xxxxxx`, http://192.168.4.1) also takes a `firmware.bin`.
+
+**USB** always works, and is the way back if a logger won't start at all:
+`pio run -e vibration -t upload` from `firmware/` (hold BOOT and press RST if it isn't found).
+Settings, serial number and WiFi details survive a firmware update.
+
 ## Pin map (hardware rev A)
 
 | TinyS3[D] pin | Connects to | Notes |
@@ -184,6 +217,6 @@ or in code with `logger_reader.read_session(...)` / `find_sessions(...)` (see ma
 | SD works but slowly / only in 1-bit | Normal for this model: it's wired for 1-bit | Nothing to do (1-bit at 20 MHz is about 25× faster than needed) |
 | Accelerometer "not responding" | Wiring or power to the ADXL355 | The status shows the ID bytes it read (should be `AD 1D ED`). `FF FF FF`: no power or MISO open. `00 00 00`: MISO held low (short, or sensor unpowered) |
 | Doesn't appear on the dashboard | Not on the master's network, wrong password, or the master's firewall | Join its hotspot `VL-xxxxxx` (it appears when the master isn't connected) and check the Network section; on a Windows master allow port 1883 through the firewall |
-| Not recording after power-on | Connected to the master, which is in control | Start it from the dashboard (or set `recording.autostart_with_master`) |
+| Not recording after power-on | Normal: loggers don't auto-start | Start it from the dashboard or its hotspot page |
 | Battery reads ~100% on USB | No battery connected (or switch off): the gauge is measuring the charger | Switch on with the battery fitted; check the reading on battery alone |
 | Clock "not synced" | No master time server reached | On the master, check chrony; or press **Set logger clocks from master** on the dashboard |

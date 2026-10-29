@@ -209,6 +209,8 @@ class Fleet:
             # The logger's own report wins; the registry fills in for older firmware
             "model": dev.get("model") or (reg or {}).get("model") or "",
             "hardware_rev": dev.get("hardware_rev") or (reg or {}).get("hardware_rev") or "",
+            "firmware": dev.get("firmware", ""),
+            "ota": (lg.status.get("features") or {}).get("ota"),
             "groups": lg.groups,
             "online": lg.online,
             "last_seen": lg.last_seen,
@@ -292,6 +294,45 @@ class Fleet:
         res["restart_required"] = bool((r.get("result") or {}).get("restart_required")) or bool(restart)
         res["ok"] = r.get("status") == "ok"
         return res
+
+    async def update(self, selection: dict, image: dict, http_port: int, timeout: float = 8.0) -> dict:
+        """Send `update` (protocol/features/ota.json) to the selected loggers it applies to: the
+        image's model, OTA-capable, not already on that version. Progress then arrives as each
+        logger's ota status and events; this returns the combined acks."""
+        version, model = image["version"], image["model"]
+        targets, skipped = [], []
+        for lg in self.select(selection):
+            dev = lg.info.get("device", {})
+            if (dev.get("model") or "") != model:
+                skipped.append({"device_id": lg.device_id, "label": lg.label, "status": "skipped",
+                                "message": f"model {dev.get('model') or 'unknown'}, not {model}"})
+            elif dev.get("firmware") == version:
+                skipped.append({"device_id": lg.device_id, "label": lg.label, "status": "skipped",
+                                "message": f"already on {version}"})
+            elif not lg.has_feature("ota"):
+                skipped.append({"device_id": lg.device_id, "label": lg.label, "status": "skipped",
+                                "message": f"firmware {dev.get('firmware') or '?'} can't update over WiFi (update it over USB once)"})
+            else:
+                targets.append(lg)
+        args = {"path": f"/firmware/{model}/{version}.bin", "port": http_port, "sha256": image["sha256"],
+                "size": image["size"], "version": version, "model": model}
+        if targets:
+            res = await self.command({"ids": [lg.device_id for lg in targets]}, "update", args=args, timeout=timeout)
+        else:
+            res = {"id": "", "cmd": "update", "results": []}
+        ok = sum(r["status"] == "ok" for r in res["results"])
+        parts = [f"update to {version}: {ok} of {len(targets)} accepted"]
+        for r in res["results"]:
+            if r["status"] == "offline":
+                parts.append(f"{r['label']} offline")
+            elif r["status"] == "no_reply":
+                parts.append(f"{r['label']} didn't reply")
+            elif r["status"] in ("error", "not_applicable"):
+                why = {"busy": "busy", "invalid_args": "refused"}.get(r.get("error"), r.get("error", "failed"))
+                parts.append(f"{r['label']} {why}" + (f": {r['message']}" if r.get("message") else ""))
+        parts += [f"{r['label']} {r['message']}" for r in skipped]
+        return {**res, "cmd": "update", "results": res["results"] + skipped, "summary": "; ".join(parts),
+                "ok": bool(targets) and ok == len(targets)}
 
     async def set_clocks(self, selection: dict) -> dict:
         """Fallback when NTP isn't working: set loggers' clocks to the master's UTC."""

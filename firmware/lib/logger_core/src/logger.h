@@ -52,6 +52,8 @@ public:
     const String& serial() const { return serial_; }
     uint32_t bootId() const { return bootId_; }
     const String& resetReason() const { return resetReason_; }
+    const char* firmware() const { return firmware_; }
+    const char* model() const { return model_; }
     bool setSerial(const String& serial);
     String label() const;  // serial, else config name, else device id: used in file names
 

@@ -12,6 +12,9 @@
   <span class="small"><span class="dot" id="brokerDot"></span><span id="brokerText">connecting…</span></span>
   <span class="small muted" id="clock"></span>
   <span class="small warn-text" id="clockWarn"></span>
+  <span style="margin-left:auto"></span>
+  <button id="navFleet" class="small">Fleet</button>
+  <button id="navFirmware" class="small">Firmware</button>
 </header>
 
 <main>
@@ -43,6 +46,29 @@
     </div>
     <div class="cards" id="cards"></div>
     <p class="muted" id="empty" hidden>No loggers yet. They appear here as soon as they connect to the broker.</p>
+  </section>
+
+  <section id="firmware">
+    <div class="panel">
+      <h2>Upload firmware</h2>
+      <div class="bar">
+        <input type="file" id="fwFile" accept=".bin">
+        <input id="fwModel" placeholder="Model, e.g. VL-P1" maxlength="40" size="12">
+        <input id="fwVersion" placeholder="Version, e.g. 0.4.0" maxlength="40" size="12">
+        <input id="fwNotes" placeholder="Notes (optional)" maxlength="500">
+        <button class="primary" id="fwUpload">Upload</button>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Build with <code>pio run -e vibration</code> and upload
+        <code>firmware/.pio/build/vibration/firmware.bin</code>. Model and version are filled in from the image
+        when it carries them. Images are checked before they're stored, and kept on the master
+        (<code>registry/firmware/</code>).</p>
+      <div id="fwUploadResult"></div>
+    </div>
+    <div class="panel">
+      <h2>Stored images</h2>
+      <div id="fwImages"></div>
+    </div>
+    <div id="fwModels"></div>
   </section>
 
   <section id="detail">

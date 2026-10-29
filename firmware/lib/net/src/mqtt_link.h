@@ -32,6 +32,7 @@ public:
     void announce() override { announce_ = true; }
     void statusSoon() override { statusSoon_ = true; }
     bool syncTime() override;
+    String masterHost() const override { return connected_ ? brokerHost_ : String(); }
 
 private:
     static void onEvent(void* self, esp_event_base_t, int32_t id, void* data);

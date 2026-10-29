@@ -54,6 +54,7 @@ function connect() {
       setBroker(m.broker_connected);
       renderFleet();
       if (current) openDetail(current, true);
+      else if (location.hash === "#firmware") showPage("firmware");
       else if (location.hash.length > 1) {
         const [id, t] = location.hash.slice(1).split("/");
         if (loggers.has(id)) openDetail(id).then(() => t && setTab(t));
@@ -61,12 +62,14 @@ function connect() {
     } else if (m.type === "logger") {
       loggers.set(m.logger.device_id, m.logger);
       renderFleetSoon();
+      renderFirmwareSoon();
       if (m.logger.device_id === current) renderDetailSoon();
     } else if (m.type === "data") {
       addPoint(m.device_id, m.name, m.message);
       if (m.device_id === current) { if (tab === "live") drawPlotSoon(); if (tab === "orientation") updateOrientation(); }
     } else if (m.type === "event") {
       if (m.device_id === current && detailData) { detailData.events.push(m.event); if (tab === "events") renderEvents(); }
+      if (m.event.source === "ota") renderFirmwareSoon();
     } else if (m.type === "broker") {
       setBroker(m.connected);
     }
@@ -153,6 +156,7 @@ function cardHtml(lg) {
       <dt>Sensors</dt><dd>${sensorsHtml(f)}</dd>
       <dt>WiFi</dt><dd>${wifi}</dd>
       <dt>Clock</dt><dd>${clockHtml(f.core)}</dd>
+      ${otaHtml(lg.ota) ? `<dt>Firmware</dt><dd>${otaHtml(lg.ota)}</dd>` : ""}
     </dl>
     ${warn.length ? `<ul class="warnings">${warn.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
   </div>`;
@@ -208,6 +212,7 @@ let detailData = null;
 async function openDetail(id, keepTab) {
   current = id;
   document.body.classList.add("detail");
+  document.body.classList.remove("firmware");
   if (!keepTab) setTab("overview");
   try {
     detailData = await api(`/api/loggers/${id}`);
@@ -260,7 +265,8 @@ function renderOverview(lg) {
   const f = feats(lg), out = [];
   const head = [["State", stateOf(lg)], ["Uptime", lg.status.uptime_ms != null ? ago(lg.status.uptime_ms / 1000).replace(" ago", "") : "–"],
     ["Boot", lg.status.boot_id + (((lg.status.features || {}).core || {}).reset_reason ? ` (${lg.status.features.core.reset_reason.replace("_", " ")})` : "")], ["Groups", (lg.groups || []).join(", ") || "–"],
-    ["Last seen", lg.last_seen ? ago(nowS() - lg.last_seen) : "–"]];
+    ["Last seen", lg.last_seen ? ago(nowS() - lg.last_seen) : "–"],
+    ["Firmware", (lg.firmware || "?") + (lg.ota && lg.ota.state && lg.ota.state !== "idle" ? ` (${lg.ota.state}${lg.ota.state === "downloading" ? ` ${lg.ota.progress_pct || 0}%` : ""})` : "")]];
   out.push(`<div class="panel"><h2>Logger</h2><dl class="kv">${head.map(([k, v]) => `<dt>${k}</dt><dd>${esc(valueText(v))}</dd>`).join("")}</dl>
     ${(lg.mismatches || []).length ? `<ul class="warnings">${lg.mismatches.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</div>`);
   for (const [inst, st] of Object.entries(f)) {
@@ -445,7 +451,8 @@ function renderEvents() {
   const ev = (detailData && detailData.events) || [];
   $("events").innerHTML = ev.slice().reverse().map(e => {
     const t = e.t ? new Date(e.t).toLocaleString() : e.received ? new Date(e.received * 1000).toLocaleString() : `uptime ${Math.round((e.uptime_ms || 0) / 1000)} s`;
-    return `<div><b>${esc(e.name)}</b> <span class="muted">${esc(e.source || "")} · ${esc(t)}</span>${e.detail ? `<br><span class="small muted">${esc(JSON.stringify(e.detail))}</span>` : ""}</div>`;
+    const text = EVENT_TEXT[e.name] && e.detail ? EVENT_TEXT[e.name](e.detail) : "";
+    return `<div><b>${esc(e.name)}</b> <span class="muted">${esc(e.source || "")} · ${esc(t)}</span>${text ? `<br>${esc(text)}` : e.detail ? `<br><span class="small muted">${esc(JSON.stringify(e.detail))}</span>` : ""}</div>`;
   }).join("") || `<span class="muted">No events since the master started.</span>`;
 }
 
@@ -779,7 +786,135 @@ setInterval(() => {
 setInterval(renderFleetSoon, 10000);  // keeps "seen … ago" fresh
 setInterval(checkClock, 60000);
 
+// ---------- firmware updates (OTA, protocol/features/ota.json) ----------
+// One line for a logger's update state, for cards, the overview and the firmware page
+function otaHtml(o) {
+  if (!o || !o.state) return "";
+  const v = o.target_version ? ` ${esc(o.target_version)}` : "";
+  switch (o.state) {
+    case "downloading": return `<span class="prog"><i style="width:${o.progress_pct || 0}%"></i></span>updating to${v}: ${o.progress_pct || 0}%`;
+    case "verifying": return `updating to${v}: checking`;
+    case "rebooting": return `updating to${v}: restarting`;
+    case "confirming": return `checking${v} is healthy${o.confirm_s != null ? ` (${o.confirm_s} s left)` : ""}`;
+    case "failed": return `<span class="err-text">update failed: ${esc(o.last_error || "unknown error")}</span>`;
+    default: return o.last_error ? `<span class="warn-text">${esc(o.last_error)}</span>` : "";
+  }
+}
+const otaBusy = o => o && ["downloading", "verifying", "rebooting", "confirming"].includes(o.state);
+const EVENT_TEXT = {
+  update_started: d => `Firmware update to ${d.version} started`,
+  update_failed: d => `Firmware update to ${d.version} failed: ${d.error}. The old firmware is still running.`,
+  update_installed: d => `Firmware ${d.version} installed (was ${d.previous_version})`,
+  update_rolled_back: d => `Firmware ${d.version} rolled back to ${d.previous_version}: ${d.reason}`,
+};
+
+function showPage(page) {
+  document.body.classList.toggle("firmware", page === "firmware");
+  if (page !== "detail") { current = null; document.body.classList.remove("detail"); }
+  $("navFirmware").classList.toggle("on", page === "firmware");
+  $("navFleet").classList.toggle("on", page === "fleet");
+  history.replaceState(null, "", page === "firmware" ? "#firmware" : "#");
+  if (page === "firmware") renderFirmware(true);
+  if (page === "fleet") renderFleet();
+}
+$("navFleet").onclick = () => showPage("fleet");
+$("navFirmware").onclick = () => showPage("firmware");
+
+let fwImages = [], fwTimer = null;
+const fwSel = new Set();   // device ids ticked on the firmware page
+const renderFirmwareSoon = () => {
+  if (document.body.classList.contains("firmware") && !fwTimer) fwTimer = setTimeout(() => { fwTimer = null; renderFirmware(); }, 300);
+};
+async function renderFirmware(reload) {
+  if (reload) { try { fwImages = await api("/api/firmware"); } catch (e) { fwImages = []; } }
+  $("fwImages").innerHTML = fwImages.length ? `<div class="tblwrap"><table class="tbl">
+    <tr><th>Model</th><th>Version</th><th>Size</th><th>Uploaded</th><th>Notes</th><th></th></tr>
+    ${fwImages.map(i => `<tr><td>${esc(i.model)}</td><td>${esc(i.version)}</td><td>${(i.size / 1024).toFixed(0)} KB</td>
+      <td>${new Date(i.uploaded * 1000).toLocaleString()}</td><td class="small">${esc(i.notes || "")}${i.marker ? "" : ` <span class="warn-text">(no model marker in the image)</span>`}</td>
+      <td><button class="danger small" data-fwdel="${esc(i.model)}/${esc(i.version)}">Delete</button></td></tr>`).join("")}
+    </table></div>` : `<span class="muted">No firmware uploaded yet.</span>`;
+
+  // One panel per model: its loggers, their versions and update state
+  const models = new Set([...fwImages.map(i => i.model), ...[...loggers.values()].map(l => l.model).filter(Boolean)]);
+  const keepVersion = {};
+  document.querySelectorAll("[data-fwver]").forEach(sel => keepVersion[sel.dataset.fwver] = sel.value);
+  $("fwModels").innerHTML = [...models].sort().map(model => {
+    const imgs = fwImages.filter(i => i.model === model).sort((a, b) => b.uploaded - a.uploaded);
+    const list = [...loggers.values()].filter(l => l.model === model).sort((a, b) => a.label.localeCompare(b.label));
+    const opts = imgs.map(i => `<option value="${esc(i.version)}"${keepVersion[model] === i.version ? " selected" : ""}>${esc(i.version)}</option>`).join("");
+    const rows = list.map(l => {
+      const o = l.ota || {}, ota = l.info.features && l.info.features.some(f => f.feature === "ota");
+      const rec = feats(l).recording && feats(l).recording.recording;
+      const note = !ota ? `<span class="muted">no WiFi updates in this firmware (update over USB once)</span>`
+        : otaHtml(o) || (rec ? `<span class="muted">recording: stop it to update</span>` : o.previous_version ? `<span class="muted">updated from ${esc(o.previous_version)}</span>` : "");
+      return `<tr><td><input type="checkbox" data-fwsel="${esc(l.device_id)}" ${fwSel.has(l.device_id) ? "checked" : ""}></td>
+        <td>${esc(l.label)}<div class="small muted">${esc(l.device_id)}</div></td>
+        <td><span class="pill ${stateOf(l)}">${stateOf(l)}</span></td>
+        <td>${esc(l.firmware || "?")}</td><td>${note}</td></tr>`;
+    }).join("");
+    return `<div class="panel"><h2>${esc(model)}</h2>
+      ${list.length ? `<div class="tblwrap"><table class="tbl"><tr><th></th><th>Logger</th><th>State</th><th>Firmware</th><th>Update</th></tr>${rows}</table></div>`
+                    : `<span class="muted">No ${esc(model)} loggers have connected yet.</span>`}
+      <div class="bar" style="margin-top:10px">
+        ${imgs.length ? `<label class="small muted">Install <select data-fwver="${esc(model)}">${opts}</select></label>
+          <button class="primary" data-fwupd="${esc(model)}" data-scope="selected">Update selected</button>
+          <button data-fwupd="${esc(model)}" data-scope="all">Update all ${esc(model)}</button>`
+          : `<span class="muted small">Upload a ${esc(model)} image above to update these loggers.</span>`}
+      </div>
+      <div data-fwresult="${esc(model)}"></div></div>`;
+  }).join("") || `<p class="muted">No loggers or firmware yet.</p>`;
+}
+
+// Firmware images say what they are: VLFW-MODEL=<model>;VLFW-VERSION=<version>;
+$("fwFile").onchange = async () => {
+  const f = $("fwFile").files[0];
+  if (!f) return;
+  const text = new TextDecoder("latin1").decode(await f.arrayBuffer());
+  const m = /VLFW-MODEL=([A-Za-z0-9._-]{1,40});VLFW-VERSION=([A-Za-z0-9._-]{1,40});/.exec(text);
+  if (m) { $("fwModel").value = m[1]; $("fwVersion").value = m[2]; }
+};
+$("fwUpload").onclick = async () => {
+  const out = $("fwUploadResult"), f = $("fwFile").files[0];
+  if (!f) return showError(out, "Choose a firmware.bin file first.");
+  const q = new URLSearchParams({ model: $("fwModel").value.trim(), version: $("fwVersion").value.trim(),
+                                  filename: f.name, notes: $("fwNotes").value.trim() });
+  try {
+    const r = await fetch(`/api/firmware?${q}`, { method: "PUT", body: await f.arrayBuffer() });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    showResult(out, { summary: `Stored ${d.model} ${d.version} (${(d.size / 1024).toFixed(0)} KB).` }, true);
+    $("fwFile").value = ""; $("fwNotes").value = "";
+    renderFirmware(true);
+  } catch (e) { showError(out, e); }
+};
+$("fwImages").addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-fwdel]");
+  if (!b || !confirm(`Delete firmware ${b.dataset.fwdel} from the master? Loggers already running it are unaffected.`)) return;
+  try { await api(`/api/firmware/${b.dataset.fwdel}`, {}, "DELETE"); renderFirmware(true); }
+  catch (e) { showError($("fwUploadResult"), e); }
+});
+$("fwModels").addEventListener("change", ev => {
+  const cb = ev.target.closest("[data-fwsel]");
+  if (cb) cb.checked ? fwSel.add(cb.dataset.fwsel) : fwSel.delete(cb.dataset.fwsel);
+});
+$("fwModels").addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-fwupd]");
+  if (!b) return;
+  const model = b.dataset.fwupd, out = document.querySelector(`[data-fwresult="${CSS.escape(model)}"]`);
+  const version = document.querySelector(`[data-fwver="${CSS.escape(model)}"]`).value;
+  const ids = [...loggers.values()].filter(l => l.model === model && (b.dataset.scope === "all" || fwSel.has(l.device_id))).map(l => l.device_id);
+  if (!ids.length) return showError(out, "Tick the loggers to update, or use Update all.");
+  if (!confirm(`Install ${model} firmware ${version} on ${ids.length} logger${ids.length === 1 ? "" : "s"}?\n\n` +
+      `• Loggers that are recording refuse: stop them first.\n` +
+      `• Each one downloads the image (about a minute), restarts, and is offline for a few seconds.\n` +
+      `• If the new firmware isn't healthy (sensors OK, back on the master) within its confirm time ` +
+      `(5 minutes by default), the logger switches back to its current firmware by itself.`)) return;
+  try { showResult(out, await api("/api/update", { selection: { ids }, model, version, timeout: 10 })); }
+  catch (e) { showError(out, e); }
+});
+
 // ---------- start ----------
+$("navFleet").classList.add("on");   // the page opens on the fleet (or #firmware: showPage moves it)
 (async () => {
   try { features = await api("/api/features"); } catch {}
   checkClock();

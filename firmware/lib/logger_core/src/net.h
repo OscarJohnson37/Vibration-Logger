@@ -27,6 +27,9 @@ public:
     // Something in status changed that's worth sending before the next interval (rate-limited)
     virtual void statusSoon() {}
 
+    // The master's host as this logger reached it (for fetching files from it); empty if none
+    virtual String masterHost() const { return String(); }
+
     // Start a network time sync now; false if there's no time server to ask
     virtual bool syncTime() = 0;
 };

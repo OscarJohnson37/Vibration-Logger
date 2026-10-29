@@ -76,6 +76,18 @@ logger's serial console), once per unit:
 It then joins the hotspot, finds the broker by mDNS, syncs its clock, and appears on the
 dashboard (and in `registry/devices.yaml`).
 
+## Updating loggers
+
+New firmware goes on over WiFi from the dashboard's **Firmware** page: upload the
+`firmware.bin` built on a development PC (`pio run -e vibration`), then **Update** the
+loggers. Each one downloads it from this PC (port 8080, so keep that open), restarts, and rolls
+itself back if the new firmware isn't healthy within 5 minutes. Loggers that are recording
+refuse until they're stopped. Images are kept in `registry/firmware/` in this checkout
+(git-ignored; back it up with the registry). See master/README.md, "Firmware updates".
+
+Updating the master itself is separate: `git pull` and run `setup.sh` again (needs internet,
+so Ethernet).
+
 ## Checks
 
 ```bash

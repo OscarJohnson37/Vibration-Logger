@@ -212,7 +212,7 @@ Every logger that receives a command replies exactly once, on its own `loggers/<
 The commands themselves are defined per feature (see [features/](features/)): e.g. `core`
 provides `identify`, `mark`, `get_config`, `set_config`, `sync_time`, `reboot`; `recording`
 provides `start`, `stop`, `roll_file`; `publish` provides `publish`; `accel` provides
-`self_test`.
+`self_test`; `ota` provides `update` (see Firmware updates).
 
 Commands received while asleep are lost; the master resends them after the logger's next
 `status`.
@@ -351,6 +351,40 @@ Loggers sync with the master's NTP server when they connect, then every hour (co
 and on `sync_time`. Every successful sync also writes a `time_sync` marker into the current
 data file, which is what lets the reader correct timestamps afterwards.
 
+## Firmware updates
+
+Provided by the `ota` feature ([features/ota.json](features/ota.json)). The master keeps
+firmware images (one per model and version) and serves them over HTTP; loggers fetch them
+themselves, so MQTT only carries the small command.
+
+1. The master sends `update` to each logger that needs it (right model, OTA-capable, not
+   already on that version):
+   ```json
+   { "v": 1, "id": "u1", "cmd": "update",
+     "args": { "path": "/firmware/VL-P1/0.4.0.bin", "port": 8080, "version": "0.4.0", "model": "VL-P1",
+               "size": 1108976, "sha256": "3f1c…" } }
+   ```
+   The logger downloads `http://<the host it reached the MQTT broker at>:<port><path>` (or
+   `url`, if given), so the master never needs to know its own address.
+2. The logger acks straight away: `ok` with `{ "accepted": true }`, or `busy` (recording, or an
+   update already running) or `invalid_args` (missing or bad arguments, another model's image,
+   too big for the app slot: 3342336 bytes).
+3. Progress is in `status.features.ota`: `state` goes `downloading` (with `progress_pct`) →
+   `verifying` → `rebooting` → `confirming` (with `confirm_s`) → `idle`, or `failed` with
+   `last_error` if the download or checks fail (the old firmware keeps running).
+4. After rebooting into the new firmware, it has `ota.confirm_timeout_s` (default 300 s) to
+   become healthy: sensors OK and connected to the master. Then it's permanent
+   (`update_installed`). If not, or if it keeps crashing, the logger switches back to the
+   previous firmware and reboots (`update_rolled_back`).
+
+Events (source `ota`): `update_started`, `update_failed`, `update_installed`,
+`update_rolled_back`. The running version is always `info.device.firmware`.
+
+Firmware images carry a marker, `VLFW-MODEL=<model>;VLFW-VERSION=<version>;`, so the master
+and the logger can refuse another model's image. The logger-hosted page also accepts an image
+directly (`POST /update`), for updating in the field without a master; USB flashing remains the
+recovery path.
+
 ## Security
 
 v1 relies on the master's private network: the broker requires a username and password
@@ -362,3 +396,4 @@ be added in a later version without changing topics or payloads.
 | Version | Date | Changes |
 |---|---|---|
 | 1 | 2026-10-08 | First version: feature model, groups, configurable data publications |
+| 1 | 2026-10-29 | Added (compatible): `ota` feature and firmware updates |
