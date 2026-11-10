@@ -16,7 +16,7 @@
 #include <wifi_feature.h>
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.4.3"
+#define FIRMWARE_VERSION "0.4.5"
 #endif
 
 // Identifies this image for over-the-air updates: a logger only installs firmware for its own model
@@ -24,6 +24,7 @@ static const char FIRMWARE_ID[] = "VLFW-MODEL=VL-P1;VLFW-VERSION=" FIRMWARE_VERS
 
 // TinyS3[D] pin map (docs/PLAN.md, Pin map). IO8/IO9 are the I2C bus (fuel gauge, BME280);
 // IO0 is the BOOT strap pin and stays free. IO1/IO2 drive the case LEDs; IO43/IO44 are spare.
+// IO38 is the board's antenna switch, driven by the wifi feature (wifi.antenna).
 static const logger::Adxl355::Pins ADXL355_PINS = {
     /*sck*/ 3, /*mosi*/ 21, /*miso*/ 5, /*cs*/ 4, /*drdy*/ -1};
 static const logger::SdCard::Pins SD_PINS = {

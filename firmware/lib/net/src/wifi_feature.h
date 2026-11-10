@@ -30,7 +30,8 @@
 // Config (wifi section): "enabled": true, "networks": [{ "ssid", "password" }],
 //                        "hotspot": "no_master" | "no_network" | "always" | "never",
 //                        "hotspot_password": "" (open; 8+ characters for WPA2),
-//                        "auto_off_after_s": 60
+//                        "auto_off_after_s": 60, "antenna": "internal" | "external" (IO38; if no
+//                        network is found for a minute the other antenna is tried, and so on)
 #pragma once
 
 #include <WebServer.h>
@@ -97,6 +98,10 @@ private:
     bool hadClient_ = false;      // someone has used the hotspot since it came on
     uint32_t lastClientMs_ = 0;   // last time a device was joined to it
     uint32_t lastClientCheck_ = 0;
+    int antennaLevel_ = 0;            // IO38 now
+    int configuredAntennaLevel_ = 0;  // IO38 for wifi.antenna
+    uint32_t antennaSince_ = 0;       // last connected, or last antenna change
+    uint32_t antennaSwitches_ = 0;
     String uploadError_;
 };
 

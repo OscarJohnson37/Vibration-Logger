@@ -17,6 +17,8 @@
     "ssid": { "type": "string" },
     "ip": { "type": "string" },
     "rssi_dbm": { "type": "integer", "unit": "dBm" },
+    "antenna_io38": { "type": "integer", "enum": [0, 1], "description": "Antenna switch level in use (TinyS3[D] IO38) while connected." },
+    "antenna_fallback": { "type": "boolean", "description": "Connected on the other antenna than wifi.antenna asks for: the configured one found no network for 60 s." },
     "trying": { "type": "string", "description": "Network being looked for, while not joined." },
     "hotspot": { "type": "string", "description": "The hotspot's name, while it's on." },
     "hotspot_ip": { "type": "string" },

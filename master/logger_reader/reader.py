@@ -374,6 +374,7 @@ class SessionFiles:
     device_id: str
     logger: str                                  # serial, name or device id
     files: dict[int, list[Path]] = field(default_factory=dict)   # boot id -> files in order
+    unreadable: list[Path] = field(default_factory=list)         # in this session's folder, header unreadable
 
     @property
     def boots(self) -> list[int]:
@@ -406,10 +407,12 @@ def find_sessions(folder: str | Path) -> list[SessionFiles]:
     """
     groups: dict[tuple[str, str], SessionFiles] = {}
     order: dict[Path, int] = {}
+    bad: list[Path] = []
     for p in sorted(Path(folder).rglob("*.dlog")):
         try:
             md = read_metadata(p)
         except (dlog.DlogError, OSError, struct.error):
+            bad.append(p)  # e.g. a damaged SD card: reported with its session below, not dropped silently
             continue
         dev = md.get("device", {})
         name = session_name(md, p) or "unnamed"
@@ -422,4 +425,10 @@ def find_sessions(folder: str | Path) -> list[SessionFiles]:
     for s in groups.values():
         for paths in s.files.values():
             paths.sort(key=lambda p: order[p])
+    # v1.1 layout: a file's folder is its session, and its name starts with the logger's label
+    for p in bad:
+        owner = next((s for s in groups.values() if s.name == p.parent.name and p.name.startswith(f"{s.logger}_")),
+                     None) or next((s for s in groups.values() if s.name == p.parent.name), None)
+        if owner is not None:
+            owner.unreadable.append(p)
     return sorted(groups.values(), key=lambda s: (s.name, s.logger))

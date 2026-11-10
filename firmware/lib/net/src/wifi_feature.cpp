@@ -152,6 +152,11 @@ tick();nets();setInterval(tick,2000);
 
 namespace {
 constexpr uint32_t CONNECT_TIMEOUT_MS = 15000;  // per network, before trying the next
+// TinyS3[D] RF switch (BGS12WN6, schematic net RF_CTL_ONBOARD, 100k pull-down): IO38 picks the
+// onboard antenna or the u.FL socket. Which level is which isn't confirmed yet, so the logger
+// doesn't rely on it: if the configured choice finds no network, it tries the other one.
+constexpr int PIN_ANTENNA_SELECT = 38;
+constexpr uint32_t ANTENNA_FALLBACK_MS = 60000;  // no network this long: try the other antenna
 }
 
 bool WifiFeature::begin(Logger& host, JsonObjectConst config) {
@@ -177,6 +182,12 @@ bool WifiFeature::begin(Logger& host, JsonObjectConst config) {
     const String& id = host.deviceId();
     ssid_ = host.serial().length() ? host.serial() : "VL-" + id.substring(id.length() - 6);
     ssid_.toUpperCase();
+
+    antennaLevel_ = strcmp(config["antenna"] | "internal", "external") == 0 ? HIGH : LOW;
+    configuredAntennaLevel_ = antennaLevel_;
+    pinMode(PIN_ANTENNA_SELECT, OUTPUT);
+    digitalWrite(PIN_ANTENNA_SELECT, antennaLevel_);
+    antennaSince_ = millis();
 
     WiFi.persistent(false);  // settings live in our config, not the WiFi driver's flash
     WiFi.setHostname(("logger-" + id).c_str());
@@ -449,6 +460,14 @@ void WifiFeature::poll() {
         current_ = (current_ + 1) % nNetworks_;
         tryNext();
     }
+    if (connected) antennaSince_ = millis();
+    else if (millis() - antennaSince_ > ANTENNA_FALLBACK_MS) {
+        // Nothing found on this antenna (unplugged, wrong type, wrong switch level): try the other
+        antennaLevel_ = antennaLevel_ == HIGH ? LOW : HIGH;
+        digitalWrite(PIN_ANTENNA_SELECT, antennaLevel_);
+        antennaSince_ = millis();
+        antennaSwitches_++;
+    }
 
     // no_master: the hotspot is for when the master isn't around; give it time to connect first
     if (!strcmp(hotspotMode_, "no_master")) {
@@ -478,6 +497,8 @@ void WifiFeature::status(JsonObject out) const {
         out["ssid"] = WiFi.SSID();
         out["ip"] = WiFi.localIP().toString();
         out["rssi_dbm"] = WiFi.RSSI();
+        out["antenna_io38"] = antennaLevel_;
+        out["antenna_fallback"] = antennaLevel_ != configuredAntennaLevel_;
     } else if (nNetworks_) {
         out["trying"] = networks_[current_].ssid;
     }

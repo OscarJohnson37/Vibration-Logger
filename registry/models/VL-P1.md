@@ -29,7 +29,7 @@ phone through its own hotspot.
 | Battery | 3.7 V 3000 mAh LiPo with a MAX17048 fuel gauge. Charges from USB-C while the power switch is on |
 | Indicators | Green status LED and blue power LED in the case wall (the board's RGB LED shows the same) |
 | Network | 2.4 GHz WiFi only. MQTT to the master; its own hotspot `VL-xxxxxx` when the master isn't connected |
-| Antenna | Internal; a u.FL socket for an external antenna is fitted, but selecting it isn't in the firmware yet |
+| Antenna | Internal by default; set `wifi.antenna` to `external` to use the u.FL socket (applies after a restart, firmware 0.4.4+) |
 | Controls | Power switch only, no buttons |
 
 ## LED guide

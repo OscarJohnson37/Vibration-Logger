@@ -3,6 +3,7 @@
     python -m logger_reader info FILE [FILE ...]
     python -m logger_reader export FILE --stream accel --csv out.csv [--raw] [--mounted]
     python -m logger_reader capture COM22 out.dlog [--seconds 30]
+    python -m logger_reader view E:/logs [--port 8090]      # analysis viewer in the browser
 """
 
 from __future__ import annotations
@@ -79,6 +80,16 @@ def cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    try:
+        from .viewer import serve
+    except ImportError as e:
+        print(f"the viewer needs the server extras: pip install -e \"master[viewer]\" ({e})", file=sys.stderr)
+        return 2
+    serve(args.folder, args.port, args.cache, open_browser=not args.no_browser)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m logger_reader", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -95,6 +106,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--raw", action="store_true", help="raw counts instead of engineering units")
     p.add_argument("--mounted", action="store_true", help="apply the mounting axis map")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("view", help="analysis viewer in the browser for a folder of recordings")
+    p.add_argument("folder", help="e.g. the SD card's logs folder, E:/logs")
+    p.add_argument("--port", type=int, default=8090)
+    p.add_argument("--cache", help="where per-file summaries are kept (default: this user's cache folder)")
+    p.add_argument("--no-browser", action="store_true", help="don't open the browser")
+    p.set_defaults(func=cmd_view)
 
     p = sub.add_parser("capture", help="record the USB DLOG stream from a logger")
     p.add_argument("port")

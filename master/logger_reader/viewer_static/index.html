@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logger Data Viewer</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
+</head>
+<body>
+<header>
+  <h1>Logger data</h1>
+  <a href="#" id="home" class="small">All sessions</a>
+  <span class="small muted" id="folder"></span>
+  <span style="margin-left:auto"></span>
+  <span class="small muted">Times shown in this computer's time zone</span>
+</header>
+<main>
+  <p id="msg"></p>
+
+  <!-- Sessions -->
+  <section id="list">
+    <div class="panel">
+      <h2>Sessions</h2>
+      <table>
+        <thead><tr><th>Session</th><th>Logger</th><th>Power-ons</th><th>Files</th><th>Size</th><th>Scanned</th></tr></thead>
+        <tbody id="sessions"></tbody>
+      </table>
+      <p class="hint">A session is everything one logger recorded under one name, across restarts. The first time you open
+        one it's scanned into per-second summaries (cached on this computer), which takes about a minute per day of
+        recording.</p>
+    </div>
+  </section>
+
+  <!-- One session -->
+  <section id="session" hidden>
+    <div class="panel">
+      <div class="bar" style="justify-content:space-between">
+        <h2 id="title" style="margin:0">Session</h2>
+        <span class="small muted" id="span"></span>
+      </div>
+      <div id="prep" hidden style="margin-top:10px">
+        <p style="margin:0 0 6px" id="prepText">Scanning…</p>
+        <div class="progress"><i id="prepBar"></i></div>
+      </div>
+      <dl class="kv small" id="facts" style="margin-top:10px"></dl>
+    </div>
+
+    <div id="body" hidden>
+      <div class="panel">
+        <div class="bar" style="justify-content:space-between">
+          <h2 style="margin:0">Whole session</h2>
+          <div class="bar">
+            <span class="small muted">Show</span>
+            <button data-metric="rms" class="on">Vibration (RMS)</button>
+            <button data-metric="peak">Peak</button>
+            <button data-metric="mean">Gravity / mean</button>
+            <button id="zoomOut">Zoom out</button>
+            <button id="zoomAll">Whole session</button>
+          </div>
+        </div>
+        <div class="legend" id="legend" style="margin:6px 0"></div>
+        <div class="chart" id="ovChart" style="height:300px"></div>
+        <div class="chart" id="batChart" style="height:90px;margin-top:4px"></div>
+        <p class="hint">Drag across the chart to zoom in; double-click to zoom out. Shaded bands are gaps, dashed lines are
+          restarts, red ticks are clipping (the sensor's full scale reached), flags are notes. Zoom to 30 minutes or less to see
+          the waveform and spectrum.</p>
+      </div>
+
+      <div id="detail" hidden>
+        <div class="panel">
+          <div class="bar" style="justify-content:space-between">
+            <h2 style="margin:0">Waveform <span class="muted" id="winSpan"></span></h2>
+            <div class="bar">
+              <button id="exportCsv">Export CSV</button>
+            </div>
+          </div>
+          <div class="chart" id="waveChart" style="height:280px"></div>
+          <table style="margin-top:8px">
+            <thead><tr><th>Axis</th><th>Mean</th><th>RMS (vibration)</th><th>Peak</th><th>Crest</th><th>Min</th><th>Max</th></tr></thead>
+            <tbody id="stats"></tbody>
+          </table>
+          <p class="hint" id="statsNote"></p>
+        </div>
+        <div class="grid2">
+          <div class="panel">
+            <div class="bar" style="justify-content:space-between">
+              <h2 style="margin:0">Spectrum</h2>
+              <div class="bar">
+                <select id="nfft"><option value="2048">2048 pts</option><option value="8192" selected>8192 pts</option><option value="32768">32768 pts</option></select>
+                <select id="scale"><option value="lin">Linear</option><option value="log">Log (dB)</option></select>
+              </div>
+            </div>
+            <div class="chart" id="specChart" style="height:260px"></div>
+            <p class="hint" id="specHint">Amplitude of the vibration at each frequency (Hann window, averaged).</p>
+          </div>
+          <div class="panel">
+            <div class="bar" style="justify-content:space-between">
+              <h2 style="margin:0">Spectrogram</h2>
+              <select id="sgAxis"></select>
+            </div>
+            <div class="chart" id="sgChart" style="height:260px"></div>
+            <p class="hint">Frequency (up) over time (across); brighter = stronger.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
